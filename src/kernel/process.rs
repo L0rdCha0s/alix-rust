@@ -17,6 +17,12 @@ pub struct ProcessId(pub u32);
 pub const CPU_NONE: usize = usize::MAX;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ProcessMode {
+    Kernel,
+    User,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ProcessState {
     Ready,
     Running,
@@ -34,6 +40,7 @@ pub struct Process {
     pub context_sp: usize,
     pub running_on: usize,
     pub in_run_queue: bool,
+    pub mode: ProcessMode,
 }
 
 pub const MAX_PROCS: usize = 64;
@@ -125,6 +132,19 @@ pub fn init() {
 }
 
 pub fn create(name: &'static str, entry: ProcessEntry, stack_top: usize) -> Option<ProcessId> {
+    create_with_mode(name, entry, stack_top, ProcessMode::Kernel)
+}
+
+pub fn create_user(name: &'static str, entry: ProcessEntry, stack_top: usize) -> Option<ProcessId> {
+    create_with_mode(name, entry, stack_top, ProcessMode::User)
+}
+
+fn create_with_mode(
+    name: &'static str,
+    entry: ProcessEntry,
+    stack_top: usize,
+    mode: ProcessMode,
+) -> Option<ProcessId> {
     let mut table = PROCESS_TABLE.lock();
     for idx in 0..MAX_PROCS {
         if table.slots[idx].is_none() {
@@ -144,6 +164,7 @@ pub fn create(name: &'static str, entry: ProcessEntry, stack_top: usize) -> Opti
                 context_sp,
                 running_on: CPU_NONE,
                 in_run_queue: true,
+                mode,
             });
             table.run_queue.push(idx);
             return Some(pid);

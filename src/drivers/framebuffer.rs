@@ -253,6 +253,10 @@ impl Console {
             self.newline();
         }
     }
+
+    pub fn write_byte(&mut self, b: u8) {
+        self.put_char(b);
+    }
 }
 
 impl fmt::Write for Console {
@@ -287,6 +291,19 @@ pub fn init_console_with_mode(
 pub fn with_console<F: FnOnce(&mut Console)>(f: F) -> bool {
     let mut state = CONSOLE.lock();
     if let Some(console) = state.console.as_mut() {
+        f(console);
+        true
+    } else {
+        false
+    }
+}
+
+pub fn try_with_console<F: FnOnce(&mut Console)>(f: F) -> bool {
+    let mut guard = match CONSOLE.try_lock() {
+        Some(guard) => guard,
+        None => return false,
+    };
+    if let Some(console) = guard.console.as_mut() {
         f(console);
         true
     } else {

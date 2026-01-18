@@ -12,16 +12,28 @@ mod util;
 
 use crate::arch::aarch64::timer;
 use crate::drivers::{framebuffer, uart};
-use crate::kernel::{interrupts, process, smp};
+use crate::kernel::{interrupts, process, smp, user};
 
 global_asm!(include_str!("arch/aarch64/boot.S"));
 global_asm!(include_str!("arch/aarch64/exception.S"));
+
+const USER_STACK_SIZE: usize = 0x4000;
+#[repr(align(16))]
+struct UserStack([u8; USER_STACK_SIZE]);
+static mut USER_STACK: UserStack = UserStack([0; USER_STACK_SIZE]);
 
 #[no_mangle]
 pub extern "C" fn kernel_main() -> ! {
     uart::init();
 
     process::init();
+
+    let user_sp = unsafe {
+        core::ptr::addr_of!(USER_STACK.0)
+            .cast::<u8>()
+            .add(USER_STACK_SIZE) as usize
+    };
+    user::init(process_f_user, user_sp);
 
     uart::with_uart(|uart| {
         use core::fmt::Write;
@@ -51,12 +63,18 @@ pub extern "C" fn kernel_main() -> ! {
         if let Some(pid) = process::create("procE", process_e, 0) {
             let _ = writeln!(uart, "Created process {} (E)", pid.0);
         }
+        if let Some(pid) = process::create_user("procF", user::user_start, 0) {
+            let _ = writeln!(uart, "Created process {} (F user)", pid.0);
+        }
         process::for_each(|proc| {
+            let mode = match proc.mode {
+                process::ProcessMode::Kernel => "K",
+                process::ProcessMode::User => "U",
+            };
             let _ = writeln!(
                 uart,
-                "Process {}: {}",
-                proc.id.0,
-                proc.name
+                "Process {}: {} [{}]",
+                proc.id.0, proc.name, mode
             );
         });
     });
@@ -123,6 +141,14 @@ pub extern "C" fn process_d() -> ! {
 #[no_mangle]
 pub extern "C" fn process_e() -> ! {
     run_letter('E', 800)
+}
+
+#[no_mangle]
+pub extern "C" fn process_f_user() -> ! {
+    loop {
+        let _ = user::write("user: hello from EL0\n");
+        let _ = user::sleep_ms(300);
+    }
 }
 
 fn run_letter(letter: char, delay_ms: u64) -> ! {
