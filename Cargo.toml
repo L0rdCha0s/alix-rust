@@ -1,0 +1,21 @@
+[package]
+name = "ralix-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["rpi5"]
+rpi5 = []
+qemu = []
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
