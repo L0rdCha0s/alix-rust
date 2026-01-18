@@ -14,7 +14,7 @@ pub type ProcessEntry = extern "C" fn() -> !;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ProcessId(pub u32);
 
-pub const CPU_ANY: usize = usize::MAX;
+pub const CPU_NONE: usize = usize::MAX;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ProcessState {
@@ -31,8 +31,9 @@ pub struct Process {
     pub entry: ProcessEntry,
     pub state: ProcessState,
     pub stack_top: usize,
-    pub cpu_affinity: usize,
     pub context_sp: usize,
+    pub running_on: usize,
+    pub in_run_queue: bool,
 }
 
 pub const MAX_PROCS: usize = 64;
@@ -47,9 +48,48 @@ struct ProcStack([u8; STACK_SIZE]);
 static mut PROCESS_STACKS: [ProcStack; MAX_PROCS] = [ProcStack([0; STACK_SIZE]); MAX_PROCS];
 
 #[derive(Copy, Clone)]
+struct RunQueue {
+    slots: [usize; MAX_PROCS],
+    head: usize,
+    tail: usize,
+    len: usize,
+}
+
+impl RunQueue {
+    const fn new() -> Self {
+        Self {
+            slots: [INVALID_IDX; MAX_PROCS],
+            head: 0,
+            tail: 0,
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, idx: usize) {
+        if self.len >= MAX_PROCS {
+            return;
+        }
+        self.slots[self.tail] = idx;
+        self.tail = (self.tail + 1) % MAX_PROCS;
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<usize> {
+        if self.len == 0 {
+            return None;
+        }
+        let idx = self.slots[self.head];
+        self.head = (self.head + 1) % MAX_PROCS;
+        self.len -= 1;
+        Some(idx)
+    }
+}
+
+#[derive(Copy, Clone)]
 struct ProcessTable {
     slots: [Option<Process>; MAX_PROCS],
     next_pid: u32,
+    run_queue: RunQueue,
 }
 
 impl ProcessTable {
@@ -57,6 +97,7 @@ impl ProcessTable {
         Self {
             slots: [None; MAX_PROCS],
             next_pid: 1,
+            run_queue: RunQueue::new(),
         }
     }
 
@@ -84,15 +125,6 @@ pub fn init() {
 }
 
 pub fn create(name: &'static str, entry: ProcessEntry, stack_top: usize) -> Option<ProcessId> {
-    create_on_cpu(name, entry, stack_top, CPU_ANY)
-}
-
-pub fn create_on_cpu(
-    name: &'static str,
-    entry: ProcessEntry,
-    stack_top: usize,
-    cpu_affinity: usize,
-) -> Option<ProcessId> {
     let mut table = PROCESS_TABLE.lock();
     for idx in 0..MAX_PROCS {
         if table.slots[idx].is_none() {
@@ -109,9 +141,11 @@ pub fn create_on_cpu(
                 entry,
                 state: ProcessState::Ready,
                 stack_top,
-                cpu_affinity,
                 context_sp,
+                running_on: CPU_NONE,
+                in_run_queue: true,
             });
+            table.run_queue.push(idx);
             return Some(pid);
         }
     }

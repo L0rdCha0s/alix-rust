@@ -36,28 +36,27 @@ pub extern "C" fn kernel_main() -> ! {
 
     uart::with_uart(|uart| {
         use core::fmt::Write;
-        if let Some(pid) = process::create_on_cpu("procA", process_a, 0, 0) {
-            let _ = writeln!(uart, "Created process {} on CPU0 (A)", pid.0);
+        if let Some(pid) = process::create("procA", process_a, 0) {
+            let _ = writeln!(uart, "Created process {} (A)", pid.0);
         }
-        if let Some(pid) = process::create_on_cpu("procB", process_b, 0, 1) {
-            let _ = writeln!(uart, "Created process {} on CPU1 (B)", pid.0);
+        if let Some(pid) = process::create("procB", process_b, 0) {
+            let _ = writeln!(uart, "Created process {} (B)", pid.0);
         }
-        if let Some(pid) = process::create_on_cpu("procC", process_c, 0, 2) {
-            let _ = writeln!(uart, "Created process {} on CPU2 (C)", pid.0);
+        if let Some(pid) = process::create("procC", process_c, 0) {
+            let _ = writeln!(uart, "Created process {} (C)", pid.0);
         }
-        if let Some(pid) = process::create_on_cpu("procD", process_d, 0, 3) {
-            let _ = writeln!(uart, "Created process {} on CPU3 (D)", pid.0);
+        if let Some(pid) = process::create("procD", process_d, 0) {
+            let _ = writeln!(uart, "Created process {} (D)", pid.0);
         }
-        if let Some(pid) = process::create_on_cpu("procE", process_e, 0, 0) {
-            let _ = writeln!(uart, "Created process {} on CPU0 (E)", pid.0);
+        if let Some(pid) = process::create("procE", process_e, 0) {
+            let _ = writeln!(uart, "Created process {} (E)", pid.0);
         }
         process::for_each(|proc| {
             let _ = writeln!(
                 uart,
-                "Process {}: {} (cpu={})",
+                "Process {}: {}",
                 proc.id.0,
-                proc.name,
-                proc.cpu_affinity
+                proc.name
             );
         });
     });
@@ -103,37 +102,37 @@ fn halt() -> ! {
 
 #[no_mangle]
 pub extern "C" fn process_a() -> ! {
-    run_letter('A')
+    run_letter('A', 200)
 }
 
 #[no_mangle]
 pub extern "C" fn process_b() -> ! {
-    run_letter('B')
+    run_letter('B', 350)
 }
 
 #[no_mangle]
 pub extern "C" fn process_c() -> ! {
-    run_letter('C')
+    run_letter('C', 500)
 }
 
 #[no_mangle]
 pub extern "C" fn process_d() -> ! {
-    run_letter('D')
+    run_letter('D', 650)
 }
 
 #[no_mangle]
 pub extern "C" fn process_e() -> ! {
-    run_letter('E')
+    run_letter('E', 800)
 }
 
-fn run_letter(letter: char) -> ! {
+fn run_letter(letter: char, delay_ms: u64) -> ! {
     loop {
         let core = smp::cpu_id();
         framebuffer::with_console(|console| {
             use core::fmt::Write;
             let _ = writeln!(console, "CPU{}: {}", core, letter);
         });
-        timer::delay_ms(500);
+        timer::delay_ms(delay_ms);
     }
 }
 
