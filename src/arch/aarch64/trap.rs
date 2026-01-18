@@ -4,6 +4,7 @@ pub struct TrapFrame {
     pub pad: u64,
     pub elr: u64,
     pub spsr: u64,
+    pub sp_el0: u64,
 }
 
 impl TrapFrame {
@@ -13,6 +14,7 @@ impl TrapFrame {
             pad: 0,
             elr: entry as u64,
             spsr: 0x5, // EL1h, interrupts enabled
+            sp_el0: 0,
         };
         frame
     }

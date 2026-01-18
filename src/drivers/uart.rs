@@ -77,6 +77,17 @@ pub fn write_byte(byte: u8) {
     }
 }
 
+pub fn read_byte_nonblocking() -> Option<u8> {
+    unsafe {
+        if (read32(UART_BASE + UART_FR) & (1 << 4)) != 0 {
+            // RXFE: receive FIFO empty
+            None
+        } else {
+            Some(read32(UART_BASE + UART_DR) as u8)
+        }
+    }
+}
+
 impl fmt::Write for Uart {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for b in s.bytes() {

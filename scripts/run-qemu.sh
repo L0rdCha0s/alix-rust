@@ -11,4 +11,5 @@ qemu-system-aarch64 \
   -M raspi3b \
   -smp 4 \
   -kernel "$KERNEL" \
-  -serial stdio
+  -serial stdio \
+  -monitor none

@@ -8,6 +8,7 @@ use super::{
     ProcessEntry, ProcessState, ProcessTable, CPU_NONE, CURRENT, INVALID_IDX, PROCESS_TABLE,
 };
 
+const LOG_SCHED: bool = false;
 const LOG_EVERY: usize = 50;
 static LOG_TICKS: [AtomicUsize; smp::MAX_CPUS] = [
     AtomicUsize::new(0),
@@ -67,23 +68,25 @@ pub fn schedule_from_irq(frame: *mut TrapFrame) -> *mut TrapFrame {
             CURRENT[cpu].store(next_idx, Ordering::Relaxed);
             result = context_sp as *mut TrapFrame;
 
-            let tick = LOG_TICKS[cpu].fetch_add(1, Ordering::Relaxed);
-            if tick % LOG_EVERY == 0 {
-                let (from_id, from_name) = if current_idx != INVALID_IDX {
-                    table
-                        .slots[current_idx]
+            if LOG_SCHED {
+                let tick = LOG_TICKS[cpu].fetch_add(1, Ordering::Relaxed);
+                if tick % LOG_EVERY == 0 {
+                    let (from_id, from_name) = if current_idx != INVALID_IDX {
+                        table
+                            .slots[current_idx]
+                            .as_ref()
+                            .map(|p| (p.id.0, p.name))
+                            .unwrap_or((0, "none"))
+                    } else {
+                        (0, "none")
+                    };
+                    let (to_id, to_name) = table
+                        .slots[next_idx]
                         .as_ref()
                         .map(|p| (p.id.0, p.name))
-                        .unwrap_or((0, "none"))
-                } else {
-                    (0, "none")
-                };
-                let (to_id, to_name) = table
-                    .slots[next_idx]
-                    .as_ref()
-                    .map(|p| (p.id.0, p.name))
-                    .unwrap_or((0, "none"));
-                log_data = Some((cpu, from_id, from_name, to_id, to_name, table.run_queue.len));
+                        .unwrap_or((0, "none"));
+                    log_data = Some((cpu, from_id, from_name, to_id, to_name, table.run_queue.len));
+                }
             }
 
             // fallthrough to logging below
@@ -91,15 +94,17 @@ pub fn schedule_from_irq(frame: *mut TrapFrame) -> *mut TrapFrame {
 
     };
 
-    if let Some((cpu, from_id, from_name, to_id, to_name, qlen)) = log_data {
-        uart::with_uart(|uart| {
-            use core::fmt::Write;
-            let _ = writeln!(
-                uart,
-                "sched cpu{} {}({}) -> {}({}) qlen={}",
-                cpu, from_name, from_id, to_name, to_id, qlen
-            );
-        });
+    if LOG_SCHED {
+        if let Some((cpu, from_id, from_name, to_id, to_name, qlen)) = log_data {
+            uart::with_uart(|uart| {
+                use core::fmt::Write;
+                let _ = writeln!(
+                    uart,
+                    "sched cpu{} {}({}) -> {}({}) qlen={}",
+                    cpu, from_name, from_id, to_name, to_id, qlen
+                );
+            });
+        }
     }
 
     result

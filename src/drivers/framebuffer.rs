@@ -288,6 +288,7 @@ pub fn init_console_with_mode(
     Ok((out_width, out_height))
 }
 
+#[allow(dead_code)]
 pub fn with_console<F: FnOnce(&mut Console)>(f: F) -> bool {
     let mut state = CONSOLE.lock();
     if let Some(console) = state.console.as_mut() {

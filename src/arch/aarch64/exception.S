@@ -50,8 +50,8 @@ default_handler:
   wfe
   b default_handler
 
-// Trap frame size: 272 bytes
-.equ TF_SIZE, 0x110
+// Trap frame size: 280 bytes
+.equ TF_SIZE, 0x118
 
 irq_vector:
   sub sp, sp, #TF_SIZE
@@ -75,15 +75,19 @@ irq_vector:
 
   mrs x0, elr_el1
   mrs x1, spsr_el1
+  mrs x2, sp_el0
   stp x0, x1, [sp, #256]
+  str x2, [sp, #272]
 
   mov x0, sp
   bl irq_handler
   mov sp, x0
 
   ldp x0, x1, [sp, #256]
+  ldr x2, [sp, #272]
   msr elr_el1, x0
   msr spsr_el1, x1
+  msr sp_el0, x2
 
   ldp x30, xzr, [sp, #240]
   ldp x28, x29, [sp, #224]
@@ -127,15 +131,19 @@ sync_vector:
 
   mrs x0, elr_el1
   mrs x1, spsr_el1
+  mrs x2, sp_el0
   stp x0, x1, [sp, #256]
+  str x2, [sp, #272]
 
   mov x0, sp
   bl sync_handler
   mov sp, x0
 
   ldp x0, x1, [sp, #256]
+  ldr x2, [sp, #272]
   msr elr_el1, x0
   msr spsr_el1, x1
+  msr sp_el0, x2
 
   ldp x30, xzr, [sp, #240]
   ldp x28, x29, [sp, #224]
@@ -160,8 +168,10 @@ sync_vector:
 restore_context:
   mov sp, x0
   ldp x0, x1, [sp, #256]
+  ldr x2, [sp, #272]
   msr elr_el1, x0
   msr spsr_el1, x1
+  msr sp_el0, x2
 
   ldp x30, xzr, [sp, #240]
   ldp x28, x29, [sp, #224]

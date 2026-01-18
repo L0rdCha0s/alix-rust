@@ -4,6 +4,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::arch::aarch64::trap::{TrapFrame, TRAP_FRAME_SIZE};
 use crate::kernel::smp;
+use crate::kernel::vfs::{FileDesc, FD_STDERR, FD_STDOUT};
+use core::fmt;
 use crate::util::sync::SpinLock;
 
 mod scheduler;
@@ -15,6 +17,7 @@ pub type ProcessEntry = extern "C" fn() -> !;
 pub struct ProcessId(pub u32);
 
 pub const CPU_NONE: usize = usize::MAX;
+pub const MAX_FDS: usize = 8;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ProcessMode {
@@ -41,6 +44,8 @@ pub struct Process {
     pub running_on: usize,
     pub in_run_queue: bool,
     pub mode: ProcessMode,
+    pub parent: Option<ProcessId>,
+    pub fds: [Option<FileDesc>; MAX_FDS],
 }
 
 pub const MAX_PROCS: usize = 64;
@@ -122,6 +127,7 @@ static CURRENT: [AtomicUsize; smp::MAX_CPUS] = [
     AtomicUsize::new(INVALID_IDX),
     AtomicUsize::new(INVALID_IDX),
 ];
+static INIT_FDS: SpinLock<[Option<FileDesc>; MAX_FDS]> = SpinLock::new([None; MAX_FDS]);
 
 pub fn init() {
     let mut table = PROCESS_TABLE.lock();
@@ -129,14 +135,18 @@ pub fn init() {
     for cpu in 0..smp::MAX_CPUS {
         CURRENT[cpu].store(INVALID_IDX, Ordering::Relaxed);
     }
+    let mut init_fds = INIT_FDS.lock();
+    *init_fds = [None; MAX_FDS];
 }
 
 pub fn create(name: &'static str, entry: ProcessEntry, stack_top: usize) -> Option<ProcessId> {
-    create_with_mode(name, entry, stack_top, ProcessMode::Kernel)
+    let parent = current_pid();
+    create_with_mode(name, entry, stack_top, ProcessMode::Kernel, parent)
 }
 
 pub fn create_user(name: &'static str, entry: ProcessEntry, stack_top: usize) -> Option<ProcessId> {
-    create_with_mode(name, entry, stack_top, ProcessMode::User)
+    let parent = current_pid();
+    create_with_mode(name, entry, stack_top, ProcessMode::User, parent)
 }
 
 fn create_with_mode(
@@ -144,8 +154,20 @@ fn create_with_mode(
     entry: ProcessEntry,
     stack_top: usize,
     mode: ProcessMode,
+    parent: Option<ProcessId>,
 ) -> Option<ProcessId> {
     let mut table = PROCESS_TABLE.lock();
+    let inherited = if let Some(pid) = parent {
+        table
+            .slots
+            .iter()
+            .flatten()
+            .find(|p| p.id == pid)
+            .map(|p| p.fds)
+            .unwrap_or_else(|| *INIT_FDS.lock())
+    } else {
+        *INIT_FDS.lock()
+    };
     for idx in 0..MAX_PROCS {
         if table.slots[idx].is_none() {
             let pid = table.alloc_pid();
@@ -165,12 +187,136 @@ fn create_with_mode(
                 running_on: CPU_NONE,
                 in_run_queue: true,
                 mode,
+                parent,
+                fds: inherited,
             });
             table.run_queue.push(idx);
             return Some(pid);
         }
     }
     None
+}
+
+pub fn set_init_fd(fd: usize, desc: Option<FileDesc>) {
+    if fd >= MAX_FDS {
+        return;
+    }
+    let mut table = INIT_FDS.lock();
+    table[fd] = desc;
+}
+
+pub fn set_fd(pid: ProcessId, fd: usize, desc: Option<FileDesc>) -> bool {
+    if fd >= MAX_FDS {
+        return false;
+    }
+    let mut table = PROCESS_TABLE.lock();
+    for slot in table.slots.iter_mut() {
+        if let Some(proc) = slot {
+            if proc.id == pid {
+                proc.fds[fd] = desc;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub fn current_pid() -> Option<ProcessId> {
+    let cpu = smp::cpu_id();
+    let table = PROCESS_TABLE.lock();
+    let idx = CURRENT[cpu].load(Ordering::Relaxed);
+    if idx == INVALID_IDX {
+        return None;
+    }
+    table.slots[idx].as_ref().map(|p| p.id)
+}
+
+pub fn with_current<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&Process) -> R,
+{
+    let cpu = smp::cpu_id();
+    let table = PROCESS_TABLE.lock();
+    let idx = CURRENT[cpu].load(Ordering::Relaxed);
+    if idx == INVALID_IDX {
+        return None;
+    }
+    table.slots[idx].as_ref().map(f)
+}
+
+pub fn with_current_mut<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut Process) -> R,
+{
+    let cpu = smp::cpu_id();
+    let mut table = PROCESS_TABLE.lock();
+    let idx = CURRENT[cpu].load(Ordering::Relaxed);
+    if idx == INVALID_IDX {
+        return None;
+    }
+    table.slots[idx].as_mut().map(f)
+}
+
+pub fn alloc_fd_current(desc: FileDesc) -> Option<usize> {
+    with_current_mut(|proc| {
+        for fd in 0..MAX_FDS {
+            if proc.fds[fd].is_none() {
+                proc.fds[fd] = Some(desc);
+                return Some(fd);
+            }
+        }
+        None
+    })?
+}
+
+pub fn close_fd_current(fd: usize) -> bool {
+    if fd >= MAX_FDS {
+        return false;
+    }
+    with_current_mut(|proc| {
+        proc.fds[fd] = None;
+        true
+    })
+    .unwrap_or(false)
+}
+
+pub fn get_fd_current(fd: usize) -> Option<FileDesc> {
+    if fd >= MAX_FDS {
+        return None;
+    }
+    with_current(|proc| proc.fds[fd])?
+}
+
+pub struct FdWriter {
+    fd: usize,
+}
+
+impl fmt::Write for FdWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let _ = write_current_fd(self.fd, s.as_bytes());
+        Ok(())
+    }
+}
+
+pub fn with_fd_writer<F: FnOnce(&mut FdWriter)>(fd: usize, f: F) {
+    let mut writer = FdWriter { fd };
+    f(&mut writer);
+}
+
+pub fn write_current_fd(fd: usize, buf: &[u8]) -> usize {
+    let desc = match get_fd_current(fd) {
+        Some(desc) => desc,
+        None => return 0,
+    };
+    crate::kernel::vfs::write(&desc, buf)
+}
+
+pub fn write_stdout(buf: &[u8]) -> usize {
+    write_current_fd(FD_STDOUT, buf)
+}
+
+pub fn write_stderr(buf: &[u8]) -> usize {
+    write_current_fd(FD_STDERR, buf)
 }
 
 fn init_context(entry: ProcessEntry, stack_top: usize) -> usize {
