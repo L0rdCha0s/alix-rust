@@ -1,7 +1,7 @@
 use core::sync::atomic::{compiler_fence, Ordering};
 
-use crate::board::{MBOX_BASE, VC_MEM_BASE, VC_MEM_MASK};
-use crate::mmio::{read32, write32};
+use crate::drivers::mmio::{read32, write32};
+use crate::platform::board::{MBOX_BASE, VC_MEM_BASE, VC_MEM_MASK};
 
 const MBOX_READ: usize = 0x00;
 const MBOX_STATUS: usize = 0x18;

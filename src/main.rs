@@ -3,18 +3,16 @@
 
 use core::arch::global_asm;
 
-mod board;
-mod font;
-mod framebuffer;
-mod interrupts;
-mod mailbox;
-mod mmio;
-mod process;
-mod smp;
-mod sync;
-mod timer;
-mod trap;
-mod uart;
+mod arch;
+mod drivers;
+mod gfx;
+mod kernel;
+mod platform;
+mod util;
+
+use crate::arch::aarch64::timer;
+use crate::drivers::{framebuffer, uart};
+use crate::kernel::{interrupts, process, smp};
 
 global_asm!(include_str!("arch/aarch64/boot.S"));
 global_asm!(include_str!("arch/aarch64/exception.S"));
@@ -38,17 +36,20 @@ pub extern "C" fn kernel_main() -> ! {
 
     uart::with_uart(|uart| {
         use core::fmt::Write;
-        if let Some(pid) = process::create_on_cpu("cpu0", per_cpu_process, 0, 0) {
-            let _ = writeln!(uart, "Created process {} on CPU0", pid.0);
+        if let Some(pid) = process::create_on_cpu("procA", process_a, 0, 0) {
+            let _ = writeln!(uart, "Created process {} on CPU0 (A)", pid.0);
         }
-        if let Some(pid) = process::create_on_cpu("cpu1", per_cpu_process, 0, 1) {
-            let _ = writeln!(uart, "Created process {} on CPU1", pid.0);
+        if let Some(pid) = process::create_on_cpu("procB", process_b, 0, 1) {
+            let _ = writeln!(uart, "Created process {} on CPU1 (B)", pid.0);
         }
-        if let Some(pid) = process::create_on_cpu("cpu2", per_cpu_process, 0, 2) {
-            let _ = writeln!(uart, "Created process {} on CPU2", pid.0);
+        if let Some(pid) = process::create_on_cpu("procC", process_c, 0, 2) {
+            let _ = writeln!(uart, "Created process {} on CPU2 (C)", pid.0);
         }
-        if let Some(pid) = process::create_on_cpu("cpu3", per_cpu_process, 0, 3) {
-            let _ = writeln!(uart, "Created process {} on CPU3", pid.0);
+        if let Some(pid) = process::create_on_cpu("procD", process_d, 0, 3) {
+            let _ = writeln!(uart, "Created process {} on CPU3 (D)", pid.0);
+        }
+        if let Some(pid) = process::create_on_cpu("procE", process_e, 0, 0) {
+            let _ = writeln!(uart, "Created process {} on CPU0 (E)", pid.0);
         }
         process::for_each(|proc| {
             let _ = writeln!(
@@ -101,20 +102,36 @@ fn halt() -> ! {
 }
 
 #[no_mangle]
-pub extern "C" fn per_cpu_process() -> ! {
-    let core = smp::cpu_id();
-    let letter = match core {
-        0 => 'A',
-        1 => 'B',
-        2 => 'C',
-        3 => 'D',
-        _ => '?',
-    };
+pub extern "C" fn process_a() -> ! {
+    run_letter('A')
+}
 
+#[no_mangle]
+pub extern "C" fn process_b() -> ! {
+    run_letter('B')
+}
+
+#[no_mangle]
+pub extern "C" fn process_c() -> ! {
+    run_letter('C')
+}
+
+#[no_mangle]
+pub extern "C" fn process_d() -> ! {
+    run_letter('D')
+}
+
+#[no_mangle]
+pub extern "C" fn process_e() -> ! {
+    run_letter('E')
+}
+
+fn run_letter(letter: char) -> ! {
     loop {
+        let core = smp::cpu_id();
         framebuffer::with_console(|console| {
             use core::fmt::Write;
-            let _ = writeln!(console, "{}", letter);
+            let _ = writeln!(console, "CPU{}: {}", core, letter);
         });
         timer::delay_ms(500);
     }

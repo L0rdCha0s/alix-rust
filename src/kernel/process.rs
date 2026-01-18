@@ -2,9 +2,12 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::smp;
-use crate::sync::SpinLock;
-use crate::trap::{TrapFrame, TRAP_FRAME_SIZE};
+use crate::arch::aarch64::trap::{TrapFrame, TRAP_FRAME_SIZE};
+use crate::kernel::smp;
+use crate::util::sync::SpinLock;
+
+mod scheduler;
+pub use scheduler::{schedule_from_irq, start_on_cpu};
 
 pub type ProcessEntry = extern "C" fn() -> !;
 
@@ -158,63 +161,7 @@ pub fn for_each(mut f: impl FnMut(&Process)) {
     }
 }
 
-pub fn schedule_from_irq(frame: *mut TrapFrame) -> *mut TrapFrame {
-    let cpu = smp::cpu_id();
-    let mut table = PROCESS_TABLE.lock();
-
-    let current_idx = CURRENT[cpu].load(Ordering::Relaxed);
-    if current_idx != INVALID_IDX {
-        if let Some(proc) = &mut table.slots[current_idx] {
-            proc.context_sp = frame as usize;
-            if proc.state == ProcessState::Running {
-                proc.state = ProcessState::Ready;
-            }
-        }
-    }
-
-    let next_idx = find_next_runnable(&table, cpu, current_idx).unwrap_or(current_idx);
-    if next_idx == INVALID_IDX {
-        return frame;
-    }
-
-    if let Some(proc) = &mut table.slots[next_idx] {
-        proc.state = ProcessState::Running;
-        CURRENT[cpu].store(next_idx, Ordering::Relaxed);
-        return proc.context_sp as *mut TrapFrame;
-    }
-
-    frame
-}
-
-pub fn start_on_cpu(cpu: usize) -> ! {
-    let (entry, stack_top) = {
-        let mut table = PROCESS_TABLE.lock();
-        let next_idx = find_next_runnable(&table, cpu, INVALID_IDX).expect("no runnable process");
-        if let Some(proc) = &mut table.slots[next_idx] {
-            proc.state = ProcessState::Running;
-            CURRENT[cpu].store(next_idx, Ordering::Relaxed);
-            (proc.entry, proc.stack_top)
-        } else {
-            panic!("invalid process index");
-        }
-    };
-    unsafe { start_first(entry, stack_top) }
-}
-
-fn find_next_runnable(table: &ProcessTable, cpu: usize, start: usize) -> Option<usize> {
-    for offset in 1..=MAX_PROCS {
-        let idx = (start.wrapping_add(offset)) % MAX_PROCS;
-        if let Some(proc) = &table.slots[idx] {
-            let runnable = matches!(proc.state, ProcessState::Ready | ProcessState::Running);
-            if runnable && (proc.cpu_affinity == cpu || proc.cpu_affinity == CPU_ANY) {
-                return Some(idx);
-            }
-        }
-    }
-    None
-}
-
+#[allow(dead_code)]
 extern "C" {
     fn restore_context(frame: *const TrapFrame) -> !;
-    fn start_first(entry: ProcessEntry, stack_top: usize) -> !;
 }

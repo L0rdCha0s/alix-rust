@@ -2,12 +2,12 @@
 
 use core::fmt;
 
-use crate::board::UART_BASE;
-use crate::mmio::{read32, write32};
-use crate::sync::SpinLock;
+use crate::drivers::mmio::{read32, write32};
+use crate::platform::board::UART_BASE;
+use crate::util::sync::SpinLock;
 
 #[cfg(feature = "qemu")]
-use crate::board::GPIO_BASE;
+use crate::platform::board::GPIO_BASE;
 
 const UART_DR: usize = 0x00;
 const UART_FR: usize = 0x18;

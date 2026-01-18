@@ -2,9 +2,9 @@ use core::cell::UnsafeCell;
 use core::fmt;
 use core::ptr::{copy, write_volatile};
 
-use crate::font;
-use crate::mailbox;
-use crate::sync::SpinLock;
+use crate::drivers::mailbox;
+use crate::gfx::font;
+use crate::util::sync::SpinLock;
 
 const TAG_SET_PHYS_WH: u32 = 0x0004_8003;
 const TAG_SET_VIRT_WH: u32 = 0x0004_8004;

@@ -1,8 +1,8 @@
 use core::arch::asm;
 
-use crate::process;
-use crate::timer;
-use crate::trap::TrapFrame;
+use crate::arch::aarch64::timer;
+use crate::arch::aarch64::trap::TrapFrame;
+use crate::kernel::process;
 
 pub fn init_per_cpu(tick_ms: u64) {
     timer::init_tick(tick_ms);

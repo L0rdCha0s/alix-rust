@@ -59,11 +59,11 @@ pub fn start_secondary_cores() {
 #[no_mangle]
 pub extern "C" fn secondary_rust_entry(_core_id: usize) -> ! {
     let core_id = cpu_id();
-    crate::uart::with_uart(|uart| {
+    crate::drivers::uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "CPU{} online", core_id);
     });
 
-    crate::interrupts::init_per_cpu(10);
-    crate::process::start_on_cpu(core_id);
+    crate::kernel::interrupts::init_per_cpu(10);
+    crate::kernel::process::start_on_cpu(core_id);
 }
