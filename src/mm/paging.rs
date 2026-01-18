@@ -1,14 +1,11 @@
 #![allow(static_mut_refs)]
 
 use crate::arch::aarch64::mmu;
-use crate::mm::layout::{align_down, align_up};
+use crate::mm::layout::{align_down, align_up, phys_to_virt, virt_to_phys, KERNEL_VIRT_BASE};
 use crate::mm::region::{NormalizedMap, RegionKind};
 use crate::platform::board;
 
 const L2_TABLES: usize = 64;
-const L0_ENTRIES: usize = 512;
-const L1_ENTRIES: usize = 512;
-const L2_ENTRIES: usize = 512;
 
 const BLOCK_SIZE: u64 = 0x20_0000; // 2 MiB
 
@@ -27,10 +24,20 @@ impl PageTable {
     }
 }
 
-static mut L0_TABLE: PageTable = PageTable::new();
-static mut L1_TABLE: PageTable = PageTable::new();
-static mut L2_POOL: [PageTable; L2_TABLES] = [const { PageTable::new() }; L2_TABLES];
-static mut NEXT_L2: usize = 0;
+// Kernel (TTBR1) tables
+static mut K_L0: PageTable = PageTable::new();
+static mut K_L1: PageTable = PageTable::new();
+static mut K_L2_POOL: [PageTable; L2_TABLES] = [const { PageTable::new() }; L2_TABLES];
+static mut K_NEXT_L2: usize = 0;
+
+// User (TTBR0) tables
+static mut U_L0: PageTable = PageTable::new();
+static mut U_L1: PageTable = PageTable::new();
+static mut U_L2_POOL: [PageTable; L2_TABLES] = [const { PageTable::new() }; L2_TABLES];
+static mut U_NEXT_L2: usize = 0;
+
+static mut KERNEL_ROOT_PA: u64 = 0;
+static mut USER_ROOT_PA: u64 = 0;
 
 const DESC_BLOCK: u64 = 0b01;
 const DESC_TABLE: u64 = 0b11;
@@ -47,70 +54,75 @@ const AP_EL0_RW: u64 = 0b01;
 const SH_NONE: u64 = 0b00;
 const SH_INNER: u64 = 0b11;
 
-#[cfg(feature = "qemu")]
-const AP_KERNEL: u64 = AP_EL1_RW;
-#[cfg(not(feature = "qemu"))]
-const AP_KERNEL: u64 = AP_EL0_RW;
-
 pub fn init(map: &NormalizedMap) {
     unsafe {
         crate::drivers::uart::with_uart(|uart| {
             use core::fmt::Write;
             let _ = writeln!(uart, "paging: build tables");
         });
-        L0_TABLE.zero();
-        L1_TABLE.zero();
-        NEXT_L2 = 0;
-        let l1_pa = &L1_TABLE as *const _ as u64;
-        L0_TABLE.0[0] = table_desc(l1_pa);
+
+        // Initialize kernel tables (TTBR1) for higher-half mapping.
+        K_L0.zero();
+        K_L1.zero();
+        K_NEXT_L2 = 0;
+        let k_l1_pa = virt_to_phys(&K_L1 as *const _ as usize);
+        K_L0.0[0] = table_desc(k_l1_pa);
+        K_L0.0[511] = table_desc(k_l1_pa);
+
+        // Initialize user tables (TTBR0) for identity mapping.
+        U_L0.zero();
+        U_L1.zero();
+        U_NEXT_L2 = 0;
+        let u_l1_pa = virt_to_phys(&U_L1 as *const _ as usize);
+        U_L0.0[0] = table_desc(u_l1_pa);
 
         for region in map.regions() {
             if region.kind == RegionKind::Mmio {
                 continue;
             }
-            // Map all non-MMIO regions as normal memory.
-            map_range(
+            let size = region.end.saturating_sub(region.start);
+            // Kernel higher-half mapping of RAM.
+            map_range_with(
+                &mut K_L1,
+                &mut K_L2_POOL,
+                &mut K_NEXT_L2,
+                KERNEL_VIRT_BASE + region.start,
                 region.start,
-                region.end,
+                size,
                 ATTR_NORMAL,
-                AP_KERNEL,
+                AP_EL1_RW,
+                SH_INNER,
+                false,
+            );
+            // User identity mapping of RAM.
+            map_range_with(
+                &mut U_L1,
+                &mut U_L2_POOL,
+                &mut U_NEXT_L2,
+                region.start,
+                region.start,
+                size,
+                ATTR_NORMAL,
+                AP_EL0_RW,
                 SH_INNER,
                 false,
             );
         }
 
-        // Map device MMIO ranges (UART, mailbox, etc).
         map_mmio();
-        #[cfg(feature = "qemu")]
-        {
-            // Map the VC-reserved RAM window so framebuffer accesses do not fault.
-            map_range(
-                0x3c00_0000,
-                0x4000_0000,
-                ATTR_NORMAL,
-                AP_EL1_RW,
-                SH_INNER,
-                true,
-            );
-        }
+
+        KERNEL_ROOT_PA = virt_to_phys(&K_L0 as *const _ as usize);
+        USER_ROOT_PA = virt_to_phys(&U_L0 as *const _ as usize);
 
         crate::drivers::uart::with_uart(|uart| {
             use core::fmt::Write;
-            let root_pa = &L0_TABLE as *const _ as u64;
-            let l0_pa = &L0_TABLE as *const _ as u64;
-            let l1_pa = &L1_TABLE as *const _ as u64;
-            let l2_pa = &L2_POOL[0] as *const _ as u64;
-            let l0e0 = L0_TABLE.0[0];
-            let l1e0 = L1_TABLE.0[0];
-            let l2e0 = L2_POOL[0].0[0];
             let _ = writeln!(
                 uart,
-                "paging: enable mmu root={:#x} l0@{:#x} l1@{:#x} l2@{:#x} l0[0]={:#x} l1[0]={:#x} l2[0]={:#x}",
-                root_pa, l0_pa, l1_pa, l2_pa, l0e0, l1e0, l2e0
+                "paging: enable mmu ttbr0={:#x} ttbr1={:#x}",
+                USER_ROOT_PA, KERNEL_ROOT_PA
             );
         });
-        let root_pa = &L0_TABLE as *const _ as u64;
-        mmu::enable_mmu(root_pa);
+        mmu::enable_mmu(USER_ROOT_PA, KERNEL_ROOT_PA);
         crate::drivers::uart::with_uart(|uart| {
             use core::fmt::Write;
             let _ = writeln!(uart, "paging: mmu enabled");
@@ -118,35 +130,117 @@ pub fn init(map: &NormalizedMap) {
     }
 }
 
+pub fn user_root_pa() -> u64 {
+    unsafe { USER_ROOT_PA }
+}
+
+pub fn kernel_root_pa() -> u64 {
+    unsafe { KERNEL_ROOT_PA }
+}
+
 unsafe fn map_mmio() {
+    // Map MMIO into both TTBR0 (identity) and TTBR1 (higher-half).
     #[cfg(feature = "qemu")]
     {
         let base = board::PERIPHERAL_BASE as u64;
-        // Peripheral MMIO range (UART, GPIO, mailbox).
-        map_range(
+        map_range_with(
+            &mut U_L1,
+            &mut U_L2_POOL,
+            &mut U_NEXT_L2,
             base,
-            base + 0x0100_0000,
+            base,
+            0x0100_0000,
             ATTR_DEVICE,
             AP_EL1_RW,
             SH_NONE,
             true,
         );
-        // Local interrupt controller window used by per-core timer setup.
-        map_range(
-            0x4000_0000,
-            0x4020_0000,
+        map_range_with(
+            &mut K_L1,
+            &mut K_L2_POOL,
+            &mut K_NEXT_L2,
+            KERNEL_VIRT_BASE + base,
+            base,
+            0x0100_0000,
             ATTR_DEVICE,
             AP_EL1_RW,
             SH_NONE,
+            true,
+        );
+
+        map_range_with(
+            &mut U_L1,
+            &mut U_L2_POOL,
+            &mut U_NEXT_L2,
+            0x4000_0000,
+            0x4000_0000,
+            0x0020_0000,
+            ATTR_DEVICE,
+            AP_EL1_RW,
+            SH_NONE,
+            true,
+        );
+        map_range_with(
+            &mut K_L1,
+            &mut K_L2_POOL,
+            &mut K_NEXT_L2,
+            KERNEL_VIRT_BASE + 0x4000_0000,
+            0x4000_0000,
+            0x0020_0000,
+            ATTR_DEVICE,
+            AP_EL1_RW,
+            SH_NONE,
+            true,
+        );
+
+        // VC reserved RAM window used by framebuffer.
+        map_range_with(
+            &mut U_L1,
+            &mut U_L2_POOL,
+            &mut U_NEXT_L2,
+            0x3c00_0000,
+            0x3c00_0000,
+            0x0400_0000,
+            ATTR_NORMAL,
+            AP_EL1_RW,
+            SH_INNER,
+            true,
+        );
+        map_range_with(
+            &mut K_L1,
+            &mut K_L2_POOL,
+            &mut K_NEXT_L2,
+            KERNEL_VIRT_BASE + 0x3c00_0000,
+            0x3c00_0000,
+            0x0400_0000,
+            ATTR_NORMAL,
+            AP_EL1_RW,
+            SH_INNER,
             true,
         );
     }
     #[cfg(feature = "rpi5")]
     {
         let base = board::SOC_BASE as u64;
-        map_range(
+        map_range_with(
+            &mut U_L1,
+            &mut U_L2_POOL,
+            &mut U_NEXT_L2,
             base,
-            base + 0x0100_0000,
+            base,
+            0x0100_0000,
+            ATTR_DEVICE,
+            AP_EL1_RW,
+            SH_NONE,
+            true,
+        );
+        map_range_with(
+            &mut K_L1,
+            &mut K_L2_POOL,
+            &mut K_NEXT_L2,
+            KERNEL_VIRT_BASE + base,
+            base,
+            0x0100_0000,
             ATTR_DEVICE,
             AP_EL1_RW,
             SH_NONE,
@@ -155,45 +249,71 @@ unsafe fn map_mmio() {
     }
 }
 
-unsafe fn map_range(start: u64, end: u64, attr: u64, ap: u64, sh: u64, xn: bool) {
-    // Map a range using 2 MiB blocks (L2 blocks).
-    if end <= start {
+unsafe fn map_range_with(
+    l1: &mut PageTable,
+    l2_pool: &mut [PageTable; L2_TABLES],
+    next_l2: &mut usize,
+    vstart: u64,
+    pstart: u64,
+    size: u64,
+    attr: u64,
+    ap: u64,
+    sh: u64,
+    xn: bool,
+) {
+    if size == 0 {
         return;
     }
-    let mut addr = align_down(start, BLOCK_SIZE);
-    let end = align_up(end, BLOCK_SIZE);
-    while addr < end {
-        map_block(addr, attr, ap, sh, xn);
-        addr += BLOCK_SIZE;
+    let mut vaddr = align_down(vstart, BLOCK_SIZE);
+    let mut paddr = align_down(pstart, BLOCK_SIZE);
+    let end = align_up(vstart + size, BLOCK_SIZE);
+    while vaddr < end {
+        map_block_with(l1, l2_pool, next_l2, vaddr, paddr, attr, ap, sh, xn);
+        vaddr += BLOCK_SIZE;
+        paddr += BLOCK_SIZE;
     }
 }
 
-unsafe fn map_block(addr: u64, attr: u64, ap: u64, sh: u64, xn: bool) {
-    // Allocate or reuse the L2 table for the corresponding L1 entry.
-    let l1_idx = ((addr >> 30) & 0x1ff) as usize;
-    let l2_idx = ((addr >> 21) & 0x1ff) as usize;
-    let l2 = get_l2_table(l1_idx);
-    let desc = block_desc(addr, attr, ap, sh, xn);
+unsafe fn map_block_with(
+    l1: &mut PageTable,
+    l2_pool: &mut [PageTable; L2_TABLES],
+    next_l2: &mut usize,
+    vaddr: u64,
+    paddr: u64,
+    attr: u64,
+    ap: u64,
+    sh: u64,
+    xn: bool,
+) {
+    let l1_idx = ((vaddr >> 30) & 0x1ff) as usize;
+    let l2_idx = ((vaddr >> 21) & 0x1ff) as usize;
+    let l2 = get_l2_table_with(l1, l2_pool, next_l2, l1_idx);
+    let desc = block_desc(paddr, attr, ap, sh, xn);
     l2.0[l2_idx] = desc;
 }
 
-unsafe fn get_l2_table(l1_idx: usize) -> &'static mut PageTable {
-    // Ensure a valid L2 table exists for this L1 slot.
-    if L1_TABLE.0[l1_idx] & 0b11 == DESC_TABLE {
-        let pa = L1_TABLE.0[l1_idx] & 0x0000_FFFF_FFFF_F000;
-        return &mut *(pa as *mut PageTable);
+unsafe fn get_l2_table_with<'a>(
+    l1: &'a mut PageTable,
+    l2_pool: &'a mut [PageTable; L2_TABLES],
+    next_l2: &'a mut usize,
+    l1_idx: usize,
+) -> &'a mut PageTable {
+    if l1.0[l1_idx] & 0b11 == DESC_TABLE {
+        let pa = l1.0[l1_idx] & 0x0000_FFFF_FFFF_F000;
+        let va = phys_to_virt(pa);
+        return &mut *(va as *mut PageTable);
     }
-    let idx = NEXT_L2;
+    let idx = *next_l2;
     if idx >= L2_TABLES {
         loop {
             core::arch::asm!("wfe", options(nomem, nostack, preserves_flags));
         }
     }
-    NEXT_L2 += 1;
-    let table = &mut L2_POOL[idx];
+    *next_l2 += 1;
+    let table = &mut l2_pool[idx];
     table.zero();
-    let pa = table as *mut _ as u64;
-    L1_TABLE.0[l1_idx] = table_desc(pa);
+    let pa = virt_to_phys(table as *const _ as usize);
+    l1.0[l1_idx] = table_desc(pa);
     table
 }
 

@@ -1,4 +1,4 @@
-.section ".text._start","ax"
+.section ".boot","ax"
 .global _start
 .global secondary_start
 
@@ -6,6 +6,25 @@
 .extern __secondary_stacks
 .extern secondary_rust_entry
 .extern vector_table
+.extern kernel_main
+.extern __bss_start_phys
+.extern __bss_end_phys
+.extern __stack_end_phys
+.extern __kernel_virt_base
+
+// Boot page tables (identity + higher-half alias)
+.section ".boot.bss","aw",%nobits
+.align 12
+boot_l0:
+  .skip 4096
+.align 12
+boot_l1:
+  .skip 4096
+.align 12
+boot_l2:
+  .skip 4096
+
+.section ".boot","ax"
 
 _start:
   // Preserve boot arg (DTB pointer in x0) before clobbering.
@@ -67,10 +86,6 @@ el1_start:
   msr cpacr_el1, x1
   isb
 
-  // Install exception vectors.
-  ldr x1, =vector_table
-  msr vbar_el1, x1
-  isb
   // Use SP_EL1.
   mov x1, #1
   msr spsel, x1
@@ -80,24 +95,25 @@ el1_start:
   cbz x0, 2f
 
 1:
-  // Secondary cores wait for release.
-  adrp x1, __secondary_table
-  add x1, x1, :lo12:__secondary_table
+  // Secondary cores wait for release (physical address).
+  ldr x3, =__kernel_virt_base
+  ldr x1, =__secondary_table
+  sub x1, x1, x3
   ldr x2, [x1, x0, lsl #3]
   cbz x2, 3f
-  br x2
+  b secondary_el1_setup
 3:
   wfe
   b 1b
 
 2:
-  // Set up a simple stack.
-  ldr x1, =__stack_end
+  // Set up a simple physical stack.
+  ldr x1, =__stack_end_phys
   mov sp, x1
 
-  // Zero BSS.
-  ldr x1, =__bss_start
-  ldr x2, =__bss_end
+  // Zero BSS using physical addresses.
+  ldr x1, =__bss_start_phys
+  ldr x2, =__bss_end_phys
 3:
   cmp x1, x2
   b.hs 4f
@@ -105,8 +121,21 @@ el1_start:
   b 3b
 
 4:
+  // Build boot page tables and enable the MMU.
+  bl boot_enable_mmu
+
+  // Install exception vectors (now valid at higher-half VA).
+  ldr x1, =vector_table
+  msr vbar_el1, x1
+  isb
+
+  // Switch to higher-half kernel stack.
+  ldr x1, =__stack_end
+  mov sp, x1
+
   mov x0, x20
-  bl kernel_main
+  ldr x1, =kernel_main
+  br x1
 
 5:
   wfe
@@ -171,27 +200,141 @@ secondary_el1_setup:
   msr cpacr_el1, x1
   isb
 
-  // Install exception vectors for secondary cores.
-  ldr x1, =vector_table
-  msr vbar_el1, x1
-  isb
-
   // Use SP_EL1.
   mov x1, #1
   msr spsel, x1
 
-  // Load core id for stack selection.
+  // Load core id.
   mrs x0, mpidr_el1
   and x0, x0, #3
-  adrp x1, __secondary_stacks
-  add x1, x1, :lo12:__secondary_stacks
+  mov x19, x0
+
+  // Set up a physical stack for this core before MMU.
+  ldr x3, =__kernel_virt_base
+  ldr x1, =__secondary_stacks
+  sub x1, x1, x3
   mov x2, #0x4000
-  mul x3, x0, x2
-  add x1, x1, x3
+  mul x4, x19, x2
+  add x1, x1, x4
   add sp, x1, x2
 
-  bl secondary_rust_entry
+  // Enable MMU using the boot tables.
+  bl boot_enable_mmu
+
+  // Install exception vectors (now valid at higher-half VA).
+  ldr x1, =vector_table
+  msr vbar_el1, x1
+  isb
+
+  // Switch to higher-half stack for this core.
+  ldr x1, =__secondary_stacks
+  mov x2, #0x4000
+  mul x4, x19, x2
+  add x1, x1, x4
+  add sp, x1, x2
+
+  ldr x1, =secondary_rust_entry
+  br x1
 
 6:
   wfe
   b 6b
+
+// Build a minimal identity + higher-half alias mapping and enable the MMU.
+boot_enable_mmu:
+  // Zero L0/L1/L2 tables.
+  adr x0, boot_l0
+  mov x1, #0
+  mov x2, #512
+1:
+  str x1, [x0], #8
+  subs x2, x2, #1
+  b.ne 1b
+
+  adr x0, boot_l1
+  mov x2, #512
+2:
+  str x1, [x0], #8
+  subs x2, x2, #1
+  b.ne 2b
+
+  adr x0, boot_l2
+  mov x2, #512
+3:
+  str x1, [x0], #8
+  subs x2, x2, #1
+  b.ne 3b
+
+  // L0[0] = L1 table, L0[511] = L1 table (higher-half alias).
+  adr x0, boot_l0
+  adr x1, boot_l1
+  orr x2, x1, #0x3
+  str x2, [x0]
+  mov x3, #511
+  str x2, [x0, x3, lsl #3]
+
+  // L1[0] = L2 table.
+  adr x0, boot_l1
+  adr x1, boot_l2
+  orr x2, x1, #0x3
+  str x2, [x0]
+
+  // Fill L2 with 2 MiB blocks.
+  adr x0, boot_l2
+  mov x3, #0
+  mov x4, #512
+4:
+  lsl x5, x3, #21
+  // Normal memory flags: attr1 + SH=inner + AF + block.
+  mov x6, #0x705
+  // Map MMIO range (0x3F000000..0x40000000) as device.
+  cmp x3, #0x1F8
+  b.lt 5f
+  mov x6, #0x401
+5:
+  orr x6, x6, x5
+  str x6, [x0], #8
+  add x3, x3, #1
+  subs x4, x4, #1
+  b.ne 4b
+
+  // MAIR: attr0=device, attr1=normal WBWA.
+  mov x0, #0xff
+  lsl x0, x0, #8
+  msr mair_el1, x0
+
+  // TCR for 4 KiB granule, 48-bit VA, 40-bit PA.
+  // T0SZ=16, T1SZ=16, IRGN/ORGN=WBWA, SH=inner, TG0=4K, TG1=4K.
+  mov x0, #16
+  orr x0, x0, #(16 << 16)
+  orr x0, x0, #(1 << 8)
+  orr x0, x0, #(1 << 10)
+  orr x0, x0, #(3 << 12)
+  // TG0 = 0 (4K)
+  orr x0, x0, #(1 << 24)
+  orr x0, x0, #(1 << 26)
+  orr x0, x0, #(3 << 28)
+  // TG1 = 0b10 (4K)
+  orr x0, x0, #(2 << 30)
+  // IPS = 0b010 (40-bit)
+  orr x0, x0, #(2 << 32)
+  msr tcr_el1, x0
+  isb
+
+  adr x1, boot_l0
+  msr ttbr0_el1, x1
+  msr ttbr1_el1, x1
+  dsb ish
+  isb
+
+  // Enable MMU (caches off for now).
+  mrs x0, sctlr_el1
+  bic x0, x0, #(1 << 0)
+  bic x0, x0, #(1 << 2)
+  bic x0, x0, #(1 << 12)
+  msr sctlr_el1, x0
+  isb
+  orr x0, x0, #(1 << 0)
+  msr sctlr_el1, x0
+  isb
+  ret

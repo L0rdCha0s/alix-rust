@@ -13,13 +13,19 @@ This plan reflects the current state of the kernel and outlines the next steps t
 - **Paging**
   - MMU enabled with 4 KiB granule.
   - Identity-mapped RAM using 2 MiB blocks.
-  - Device memory mapped in a fixed window (board base + 16 MiB).
-  - **Shared address space** for kernel + user; EL0 RW access to RAM.
+  - Device memory mapped in a fixed window (board base + 16 MiB), plus QEMU local
+    interrupt controller window at `0x4000_0000..0x4020_0000`.
+  - QEMU additionally maps the VC-reserved RAM window `0x3c00_0000..0x4000_0000`
+    as normal memory to avoid framebuffer faults.
+  - **Shared address space** for kernel + user; TTBR0 only (TTBR1 disabled).
+  - QEMU maps RAM as EL1-only (AP_KERNEL) and runs “user” processes in EL1.
+    Non-QEMU keeps EL0 RW for now.
 
 - **Heap**
   - Kernel heap uses `linked_list_allocator` backed by contiguous frames.
   - User allocations provided by syscalls (alloc/realloc/free).
   - Global allocator routes EL0 allocations to syscall path.
+  - On QEMU, user allocations still run in EL1 due to EL1-only mappings.
 
 ## Priorities and Rationale
 

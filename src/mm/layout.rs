@@ -1,8 +1,9 @@
 pub const PAGE_SIZE: usize = 4096;
 pub const PAGE_MASK: usize = PAGE_SIZE - 1;
 
+pub const KERNEL_PHYS_BASE: u64 = 0x80000;
 pub const KERNEL_VIRT_BASE: u64 = 0xFFFF_0000_0000_0000;
-pub const PHYS_MAP_BASE: u64 = 0;
+pub const PHYS_MAP_BASE: u64 = KERNEL_VIRT_BASE;
 
 #[inline(always)]
 pub const fn align_up(value: u64, align: u64) -> u64 {

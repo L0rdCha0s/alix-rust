@@ -1,6 +1,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::arch::aarch64::trap::TrapFrame;
+use crate::arch::aarch64::mmu;
 use crate::drivers::uart;
 use crate::kernel::smp;
 
@@ -65,6 +66,7 @@ pub fn schedule_from_irq(frame: *mut TrapFrame) -> *mut TrapFrame {
                 proc.state = ProcessState::Running;
                 proc.running_on = cpu;
                 proc.in_run_queue = false;
+                mmu::set_ttbr0(proc.ttbr0);
                 proc.context_sp
             };
             CURRENT[cpu].store(next_idx, Ordering::Relaxed);
@@ -123,6 +125,7 @@ pub fn start_on_cpu(cpu: usize) -> ! {
                 proc.state = ProcessState::Running;
                 proc.running_on = cpu;
                 proc.in_run_queue = false;
+                mmu::set_ttbr0(proc.ttbr0);
                 (proc.entry, proc.stack_top)
             };
             CURRENT[cpu].store(next_idx, Ordering::Relaxed);

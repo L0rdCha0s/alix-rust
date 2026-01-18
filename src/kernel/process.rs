@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::arch::aarch64::trap::{TrapFrame, TRAP_FRAME_SIZE};
 use crate::kernel::smp;
 use crate::kernel::vfs::{FileDesc, FD_STDERR, FD_STDOUT};
+use crate::mm::paging;
 use core::fmt;
 use crate::util::sync::SpinLock;
 
@@ -46,6 +47,7 @@ pub struct Process {
     pub mode: ProcessMode,
     pub parent: Option<ProcessId>,
     pub fds: [Option<FileDesc>; MAX_FDS],
+    pub ttbr0: u64,
 }
 
 pub const MAX_PROCS: usize = 64;
@@ -161,6 +163,7 @@ fn create_with_mode(
 ) -> Option<ProcessId> {
     // Allocate a process slot, set up stack/context, and enqueue it.
     let mut table = PROCESS_TABLE.lock();
+    let ttbr0 = paging::user_root_pa();
     let inherited = if let Some(pid) = parent {
         table
             .slots
@@ -193,6 +196,7 @@ fn create_with_mode(
                 mode,
                 parent,
                 fds: inherited,
+                ttbr0,
             });
             table.run_queue.push(idx);
             return Some(pid);

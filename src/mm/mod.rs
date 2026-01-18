@@ -9,15 +9,21 @@ pub mod paging;
 pub mod region;
 
 use crate::drivers::uart;
-use crate::mm::layout::{align_up, PAGE_SIZE};
+use crate::mm::layout::{align_up, KERNEL_PHYS_BASE, PAGE_SIZE};
 use crate::mm::region::{MemoryMap, RegionKind};
 use crate::platform::board;
 
+#[repr(C)]
+struct KernelPhysInfo {
+    kernel_start: u64,
+    kernel_end: u64,
+    stack_start: u64,
+    stack_end: u64,
+    boot_end: u64,
+}
+
 extern "C" {
-    static __kernel_start: u8;
-    static __kernel_end: u8;
-    static __stack_start: u8;
-    static __stack_end: u8;
+    static __kernel_phys_info: KernelPhysInfo;
 }
 
 pub fn init(dtb_pa: u64) {
@@ -25,11 +31,17 @@ pub fn init(dtb_pa: u64) {
     let mut map = MemoryMap::new();
     let dtb_info = dtb::parse(dtb_pa, &mut map);
 
-    let kernel_start = unsafe { &__kernel_start as *const u8 as u64 };
-    let kernel_end = unsafe { &__kernel_end as *const u8 as u64 };
-    let stack_start = unsafe { &__stack_start as *const u8 as u64 };
-    let stack_end = unsafe { &__stack_end as *const u8 as u64 };
+    let info = unsafe { &__kernel_phys_info };
+    let kernel_start = info.kernel_start;
+    let kernel_end = info.kernel_end;
+    let stack_start = info.stack_start;
+    let stack_end = info.stack_end;
+    let boot_start = KERNEL_PHYS_BASE;
+    let boot_end = info.boot_end;
 
+    if boot_end > boot_start {
+        map.add_region(boot_start, boot_end.saturating_sub(boot_start), RegionKind::KernelImage);
+    }
     map.add_region(kernel_start, kernel_end.saturating_sub(kernel_start), RegionKind::KernelImage);
     map.add_region(stack_start, stack_end.saturating_sub(stack_start), RegionKind::BootStack);
 

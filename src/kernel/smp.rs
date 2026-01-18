@@ -1,5 +1,8 @@
 use core::arch::asm;
 
+use crate::arch::aarch64::mmu;
+use crate::mm::paging;
+
 pub const MAX_CPUS: usize = 4;
 const STACK_SIZE: usize = 0x4000;
 
@@ -17,7 +20,7 @@ static mut __secondary_stacks: [Stack; MAX_CPUS] = [Stack([0; STACK_SIZE]); MAX_
 pub static mut __secondary_table: [u64; MAX_CPUS] = [0; MAX_CPUS];
 
 extern "C" {
-    fn secondary_start() -> !;
+    static __secondary_start_ptr: u64;
 }
 
 pub fn cpu_id() -> usize {
@@ -41,8 +44,9 @@ pub fn current_el() -> u8 {
 pub fn start_secondary_cores() {
     // Release secondary cores via the spin-table mechanism.
     unsafe {
+        let entry = __secondary_start_ptr;
         for core in 1..MAX_CPUS {
-            __secondary_table[core] = secondary_start as *const () as u64;
+            __secondary_table[core] = entry;
         }
 
         #[cfg(feature = "qemu")]
@@ -50,7 +54,7 @@ pub fn start_secondary_cores() {
             const SPIN_TABLE_BASE: usize = 0xD8;
             for core in 1..MAX_CPUS {
                 let slot = (SPIN_TABLE_BASE + (core * 8)) as *mut u64;
-                core::ptr::write_volatile(slot, secondary_start as *const () as u64);
+                core::ptr::write_volatile(slot, entry);
             }
         }
 
@@ -62,6 +66,10 @@ pub fn start_secondary_cores() {
 pub extern "C" fn secondary_rust_entry(_core_id: usize) -> ! {
     // Entry point for secondary cores after boot.S releases them.
     let core_id = cpu_id();
+    // Switch to the final kernel page tables (TTBR1) built by CPU0.
+    mmu::set_ttbr1(paging::kernel_root_pa());
+    // Also switch TTBR0 so low MMIO addresses are mapped.
+    mmu::set_ttbr0(paging::user_root_pa());
     crate::drivers::uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "CPU{} online", core_id);

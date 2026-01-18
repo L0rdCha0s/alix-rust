@@ -32,10 +32,8 @@ pub extern "C" fn user_start() -> ! {
     unsafe {
         let entry = USER_ENTRY.expect("user entry not set") as usize;
         let sp = USER_STACK_TOP;
-        #[cfg(feature = "qemu")]
+        // TODO: switch to EL0 once user code is mapped into TTBR0.
         let spsr: u64 = 0x5; // EL1h
-        #[cfg(not(feature = "qemu"))]
-        let spsr: u64 = 0; // EL0t
         asm!(
             "msr sp_el0, {sp}",
             "msr elr_el1, {entry}",
