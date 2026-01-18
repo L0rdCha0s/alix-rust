@@ -4,6 +4,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::arch::aarch64::timer;
 use crate::arch::aarch64::trap::TrapFrame;
 use crate::drivers::keyboard;
+#[cfg(feature = "qemu")]
 use crate::drivers::local_intc;
 use crate::kernel::process;
 use crate::kernel::smp;
@@ -19,6 +20,7 @@ static IRQ_LOG_TICKS: [AtomicUsize; smp::MAX_CPUS] = [
 ];
 
 pub fn init_per_cpu(tick_ms: u64) {
+    // Initialize per-core timer IRQs and enable interrupt delivery.
     timer::init_tick(tick_ms);
     #[cfg(feature = "qemu")]
     local_intc::enable_generic_timer_irq(smp::cpu_id());
@@ -30,6 +32,7 @@ pub fn init_per_cpu(tick_ms: u64) {
 }
 
 pub fn enable_irq() {
+    // Clear DAIF.I to unmask IRQs.
     unsafe {
         asm!("msr daifclr, #2", options(nomem, nostack, preserves_flags));
     }
@@ -37,6 +40,7 @@ pub fn enable_irq() {
 
 #[no_mangle]
 pub extern "C" fn irq_handler(frame: *mut TrapFrame) -> *mut TrapFrame {
+    // Timer IRQ handler: poll input, update ticks, and schedule.
     #[cfg(feature = "qemu")]
     {
         if !local_intc::generic_timer_pending(smp::cpu_id()) {

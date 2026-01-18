@@ -30,3 +30,5 @@ pub const GPIO_BASE: usize = PERIPHERAL_BASE + 0x0020_0000;
 pub const VC_MEM_BASE: u32 = 0x4000_0000; // VC bus alias for RAM on BCM283x
 #[cfg(feature = "qemu")]
 pub const VC_MEM_MASK: u32 = 0x3FFF_FFFF;
+#[cfg(feature = "qemu")]
+pub const QEMU_RAM_SIZE: u64 = 8 * 1024 * 1024 * 1024;

@@ -15,6 +15,7 @@ const MBOX_RESPONSE_OK: u32 = 0x8000_0000;
 const SPIN_LIMIT: usize = 1_000_000;
 
 pub fn call(buffer: *mut u32) -> bool {
+    // Perform a mailbox property channel call with the provided buffer.
     let addr = buffer as usize;
     if (addr & 0xF) != 0 {
         return false;
@@ -56,9 +57,11 @@ pub fn call(buffer: *mut u32) -> bool {
 }
 
 pub fn vc_to_arm(addr: u32) -> usize {
+    // Translate a VC bus address to an ARM physical address.
     (addr & VC_MEM_MASK) as usize
 }
 
 fn arm_to_vc(addr: usize) -> u32 {
+    // Translate an ARM physical address to a VC bus address.
     (addr as u32 & VC_MEM_MASK) | VC_MEM_BASE
 }

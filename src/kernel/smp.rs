@@ -21,6 +21,7 @@ extern "C" {
 }
 
 pub fn cpu_id() -> usize {
+    // Return the core ID from MPIDR_EL1 (affinity level 0).
     let mut id: usize;
     unsafe {
         asm!("mrs {0}, mpidr_el1", out(reg) id, options(nomem, nostack, preserves_flags));
@@ -38,6 +39,7 @@ pub fn current_el() -> u8 {
 }
 
 pub fn start_secondary_cores() {
+    // Release secondary cores via the spin-table mechanism.
     unsafe {
         for core in 1..MAX_CPUS {
             __secondary_table[core] = secondary_start as *const () as u64;
@@ -58,6 +60,7 @@ pub fn start_secondary_cores() {
 
 #[no_mangle]
 pub extern "C" fn secondary_rust_entry(_core_id: usize) -> ! {
+    // Entry point for secondary cores after boot.S releases them.
     let core_id = cpu_id();
     crate::drivers::uart::with_uart(|uart| {
         use core::fmt::Write;

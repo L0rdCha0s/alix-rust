@@ -19,3 +19,6 @@ panic = "abort"
 panic = "abort"
 codegen-units = 1
 lto = true
+
+[dependencies]
+linked_list_allocator = "0.10.5"

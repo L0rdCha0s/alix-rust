@@ -8,6 +8,7 @@ const BUF_SIZE: usize = 256;
 struct RingBuffer {
     buf: [u8; BUF_SIZE],
     head: usize,
+    #[allow(dead_code)]
     tail: usize,
     len: usize,
 }
@@ -22,6 +23,7 @@ impl RingBuffer {
         }
     }
 
+    #[allow(dead_code)]
     fn push(&mut self, b: u8) -> bool {
         if self.len == BUF_SIZE {
             return false;
@@ -46,6 +48,7 @@ impl RingBuffer {
 static INPUT_BUF: SpinLock<RingBuffer> = SpinLock::new(RingBuffer::new());
 
 pub fn poll() {
+    // Poll the UART for input and push bytes into the ring buffer.
     #[cfg(feature = "qemu")]
     {
         let mut buf = match INPUT_BUF.try_lock() {
@@ -66,6 +69,7 @@ pub fn poll() {
 }
 
 pub fn read(out: &mut [u8]) -> usize {
+    // Read buffered input into the provided slice.
     poll();
     let mut buf = INPUT_BUF.lock();
     let mut count = 0;

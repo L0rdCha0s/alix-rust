@@ -3,6 +3,7 @@ ENTRY(_start)
 SECTIONS
 {
   . = 0x80000;
+  __kernel_start = .;
 
   .text : ALIGN(16)
   {
@@ -31,6 +32,8 @@ SECTIONS
   __stack_start = .;
   . = . + 0x10000; /* 64 KiB */
   __stack_end = .;
+
+  __kernel_end = .;
 
   /DISCARD/ : { *(.eh_frame .comment) }
 }

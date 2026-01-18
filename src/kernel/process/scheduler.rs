@@ -18,6 +18,7 @@ static LOG_TICKS: [AtomicUsize; smp::MAX_CPUS] = [
 ];
 
 pub fn schedule_from_irq(frame: *mut TrapFrame) -> *mut TrapFrame {
+    // Save the current context and pick the next runnable process.
     let cpu = smp::cpu_id();
     let mut log_data: Option<(usize, u32, &'static str, u32, &'static str, usize)> = None;
     let mut result = frame;
@@ -36,6 +37,7 @@ pub fn schedule_from_irq(frame: *mut TrapFrame) -> *mut TrapFrame {
             }
         }
 
+        // Select the next runnable process from the global queue.
         let next_idx = dequeue_next_runnable(&mut table);
         if next_idx.is_none() {
             if current_idx != INVALID_IDX {
@@ -111,6 +113,7 @@ pub fn schedule_from_irq(frame: *mut TrapFrame) -> *mut TrapFrame {
 }
 
 pub fn start_on_cpu(cpu: usize) -> ! {
+    // Pick the first runnable process and jump directly into it.
     let (entry, stack_top) = {
         let mut table = PROCESS_TABLE.lock();
         let next_idx = dequeue_next_runnable(&mut table).expect("no runnable process");
@@ -132,6 +135,7 @@ pub fn start_on_cpu(cpu: usize) -> ! {
 }
 
 fn dequeue_next_runnable(table: &mut ProcessTable) -> Option<usize> {
+    // Round-robin scan of the run queue to find a runnable process.
     let initial_len = table.run_queue.len;
     for _ in 0..initial_len {
         let idx = table.run_queue.pop()?;

@@ -8,6 +8,8 @@
 .extern vector_table
 
 _start:
+  // Preserve boot arg (DTB pointer in x0) before clobbering.
+  mov x20, x0
   // Drop to EL1 if needed.
   mrs x0, CurrentEL
   lsr x0, x0, #2
@@ -103,6 +105,7 @@ el1_start:
   b 3b
 
 4:
+  mov x0, x20
   bl kernel_main
 
 5:

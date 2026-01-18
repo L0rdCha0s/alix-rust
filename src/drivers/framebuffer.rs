@@ -66,6 +66,7 @@ impl Framebuffer {
     }
 
     pub fn init_with_mode(width: u32, height: u32) -> Result<Self, InitError> {
+        // Use mailbox property tags to allocate and configure the framebuffer.
         unsafe {
             let buf = &mut *MBOX.buf.get();
 
@@ -140,6 +141,7 @@ impl Framebuffer {
     }
 
     pub fn clear(&mut self, color: u32) {
+        // Fill the entire framebuffer with a solid color.
         for y in 0..self.height {
             for x in 0..self.width {
                 self.put_pixel(x, y, color);
@@ -148,6 +150,7 @@ impl Framebuffer {
     }
 
     fn scroll_rows(&mut self, rows: usize, bg: u32) {
+        // Scroll the framebuffer up by the specified number of rows.
         if rows == 0 {
             return;
         }
@@ -176,6 +179,7 @@ impl Framebuffer {
 
     #[allow(dead_code)]
     pub fn write_str(&mut self, mut x: usize, mut y: usize, s: &str, fg: u32, bg: u32) {
+        // Render a string at the given pixel position.
         for b in s.bytes() {
             if b == b'\n' {
                 y += font::FONT_HEIGHT;

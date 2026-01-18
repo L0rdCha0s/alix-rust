@@ -5,16 +5,19 @@ pub struct TrapFrame {
     pub elr: u64,
     pub spsr: u64,
     pub sp_el0: u64,
+    pub pad2: u64,
 }
 
 impl TrapFrame {
     pub fn new(entry: usize) -> Self {
+        // Initialize a trap frame for a fresh process entry.
         let frame = TrapFrame {
             x: [0; 31],
             pad: 0,
             elr: entry as u64,
             spsr: 0x5, // EL1h, interrupts enabled
             sp_el0: 0,
+            pad2: 0,
         };
         frame
     }

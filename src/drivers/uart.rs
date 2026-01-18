@@ -30,6 +30,7 @@ pub struct Uart;
 static UART_LOCK: SpinLock<()> = SpinLock::new(());
 
 pub fn init() {
+    // Initialize PL011 UART for early serial logging.
     unsafe {
         // Disable UART0.
         write32(UART_BASE + UART_CR, 0);
@@ -69,6 +70,7 @@ pub fn init() {
 }
 
 pub fn write_byte(byte: u8) {
+    // Blocking transmit of a single byte.
     unsafe {
         while (read32(UART_BASE + UART_FR) & (1 << 5)) != 0 {
             // wait for space in FIFO
@@ -78,6 +80,7 @@ pub fn write_byte(byte: u8) {
 }
 
 pub fn read_byte_nonblocking() -> Option<u8> {
+    // Non-blocking read; returns None if RX FIFO is empty.
     unsafe {
         if (read32(UART_BASE + UART_FR) & (1 << 4)) != 0 {
             // RXFE: receive FIFO empty
@@ -101,6 +104,7 @@ impl fmt::Write for Uart {
 }
 
 pub fn with_uart<F: FnOnce(&mut Uart)>(f: F) {
+    // Serialize access to the UART to avoid interleaved output.
     let _guard = UART_LOCK.lock();
     let mut uart = Uart;
     f(&mut uart);

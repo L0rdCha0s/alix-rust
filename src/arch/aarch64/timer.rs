@@ -21,6 +21,7 @@ fn frequency() -> u64 {
 }
 
 pub fn init_tick(ms: u64) {
+    // Program the per-core timer tick interval.
     let ticks = (frequency() * ms) / 1000;
     unsafe {
         TICK_TICKS = ticks.max(1);
@@ -29,6 +30,7 @@ pub fn init_tick(ms: u64) {
 }
 
 pub fn tick() {
+    // Re-arm the timer for periodic interrupts.
     unsafe {
         if TICK_TICKS != 0 {
             set_timer(TICK_TICKS);
@@ -48,6 +50,7 @@ unsafe fn set_timer(ticks: u64) {
 }
 
 pub fn delay_ms(ms: u64) {
+    // Busy-wait delay for early boot or polling loops.
     let ticks = (frequency() * ms) / 1000;
     let start = counter();
     while counter().wrapping_sub(start) < ticks {

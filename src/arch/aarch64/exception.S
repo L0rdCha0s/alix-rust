@@ -32,7 +32,7 @@ sync_current_sp0: b default_handler
 irq_current_sp0:  b default_handler
 fiq_current_sp0:  b default_handler
 serr_current_sp0: b default_handler
-sync_current_spx: b default_handler
+sync_current_spx: b sync_vector
 irq_current_spx:  b irq_vector
 fiq_current_spx:  b default_handler
 serr_current_spx: b default_handler
@@ -50,8 +50,8 @@ default_handler:
   wfe
   b default_handler
 
-// Trap frame size: 280 bytes
-.equ TF_SIZE, 0x118
+// Trap frame size: 288 bytes
+.equ TF_SIZE, 0x120
 
 irq_vector:
   sub sp, sp, #TF_SIZE

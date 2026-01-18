@@ -53,6 +53,7 @@ pub struct FileDesc {
 pub fn init() {}
 
 pub fn lookup(path: &[u8]) -> Option<NodeType> {
+    // Simple path lookup for the fixed in-memory namespace.
     match path {
         b"/" => Some(NodeType::Dir),
         b"/dev" => Some(NodeType::Dir),
@@ -63,10 +64,12 @@ pub fn lookup(path: &[u8]) -> Option<NodeType> {
 }
 
 pub fn open_path(path: &str, flags: OpenFlags) -> Option<FileDesc> {
+    // Convenience wrapper for string paths.
     open_bytes(path.as_bytes(), flags)
 }
 
 pub fn open_bytes(path: &[u8], flags: OpenFlags) -> Option<FileDesc> {
+    // Resolve a path to a device node and create a FileDesc.
     match lookup(path) {
         Some(NodeType::DevFb0) => Some(FileDesc {
             handle: FileHandle::DevFb0,
@@ -81,6 +84,7 @@ pub fn open_bytes(path: &[u8], flags: OpenFlags) -> Option<FileDesc> {
 }
 
 pub fn write(desc: &FileDesc, buf: &[u8]) -> usize {
+    // Write to a device handle (framebuffer or keyboard).
     if !desc.flags.write {
         return 0;
     }
@@ -102,6 +106,7 @@ pub fn write(desc: &FileDesc, buf: &[u8]) -> usize {
 }
 
 pub fn read(desc: &FileDesc, buf: &mut [u8]) -> usize {
+    // Read from a device handle (keyboard only for now).
     if !desc.flags.read {
         return 0;
     }

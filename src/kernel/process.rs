@@ -49,7 +49,7 @@ pub struct Process {
 }
 
 pub const MAX_PROCS: usize = 64;
-const STACK_SIZE: usize = 0x4000;
+const STACK_SIZE: usize = 512 * 1024;
 const INVALID_IDX: usize = usize::MAX;
 
 #[allow(dead_code)]
@@ -130,6 +130,7 @@ static CURRENT: [AtomicUsize; smp::MAX_CPUS] = [
 static INIT_FDS: SpinLock<[Option<FileDesc>; MAX_FDS]> = SpinLock::new([None; MAX_FDS]);
 
 pub fn init() {
+    // Reset the process table and per-CPU current pointers.
     let mut table = PROCESS_TABLE.lock();
     *table = ProcessTable::new();
     for cpu in 0..smp::MAX_CPUS {
@@ -140,11 +141,13 @@ pub fn init() {
 }
 
 pub fn create(name: &'static str, entry: ProcessEntry, stack_top: usize) -> Option<ProcessId> {
+    // Create a kernel-mode process.
     let parent = current_pid();
     create_with_mode(name, entry, stack_top, ProcessMode::Kernel, parent)
 }
 
 pub fn create_user(name: &'static str, entry: ProcessEntry, stack_top: usize) -> Option<ProcessId> {
+    // Create a user-mode process (EL0 on hardware, EL1 on QEMU).
     let parent = current_pid();
     create_with_mode(name, entry, stack_top, ProcessMode::User, parent)
 }
@@ -156,6 +159,7 @@ fn create_with_mode(
     mode: ProcessMode,
     parent: Option<ProcessId>,
 ) -> Option<ProcessId> {
+    // Allocate a process slot, set up stack/context, and enqueue it.
     let mut table = PROCESS_TABLE.lock();
     let inherited = if let Some(pid) = parent {
         table
@@ -198,6 +202,7 @@ fn create_with_mode(
 }
 
 pub fn set_init_fd(fd: usize, desc: Option<FileDesc>) {
+    // Configure initial FDs inherited by the first process tree.
     if fd >= MAX_FDS {
         return;
     }
@@ -206,6 +211,7 @@ pub fn set_init_fd(fd: usize, desc: Option<FileDesc>) {
 }
 
 pub fn set_fd(pid: ProcessId, fd: usize, desc: Option<FileDesc>) -> bool {
+    // Update a specific process's FD table.
     if fd >= MAX_FDS {
         return false;
     }
@@ -222,6 +228,7 @@ pub fn set_fd(pid: ProcessId, fd: usize, desc: Option<FileDesc>) -> bool {
 }
 
 pub fn current_pid() -> Option<ProcessId> {
+    // Return PID of the currently running process on this CPU.
     let cpu = smp::cpu_id();
     let table = PROCESS_TABLE.lock();
     let idx = CURRENT[cpu].load(Ordering::Relaxed);
@@ -235,6 +242,7 @@ pub fn with_current<F, R>(f: F) -> Option<R>
 where
     F: FnOnce(&Process) -> R,
 {
+    // Run a closure with the current process (if any).
     let cpu = smp::cpu_id();
     let table = PROCESS_TABLE.lock();
     let idx = CURRENT[cpu].load(Ordering::Relaxed);
@@ -304,6 +312,7 @@ pub fn with_fd_writer<F: FnOnce(&mut FdWriter)>(fd: usize, f: F) {
 }
 
 pub fn write_current_fd(fd: usize, buf: &[u8]) -> usize {
+    // Write to an FD belonging to the current process.
     let desc = match get_fd_current(fd) {
         Some(desc) => desc,
         None => return 0,
@@ -320,6 +329,7 @@ pub fn write_stderr(buf: &[u8]) -> usize {
 }
 
 fn init_context(entry: ProcessEntry, stack_top: usize) -> usize {
+    // Build an initial trap frame at the top of the process stack.
     let frame_ptr = (stack_top - TRAP_FRAME_SIZE) & !0xF;
     let frame = frame_ptr as *mut TrapFrame;
     unsafe {

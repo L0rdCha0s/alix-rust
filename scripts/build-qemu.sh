@@ -18,7 +18,7 @@ export RUSTC="$RUSTC_BIN"
 rustup run nightly cargo build --manifest-path "$ROOT_DIR/Cargo.toml" --release \
   --target "$ROOT_DIR/targets/aarch64-raspi3.json" \
   --no-default-features --features qemu \
-  -Z build-std=core,compiler_builtins -Z build-std-features=compiler-builtins-mem
+  -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
 
 OBJCOPY_BIN=""
 if command -v rust-objcopy >/dev/null 2>&1; then
