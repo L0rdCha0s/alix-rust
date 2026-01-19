@@ -143,13 +143,14 @@ unsafe fn map_mmio() {
     #[cfg(feature = "qemu")]
     {
         let base = board::PERIPHERAL_BASE as u64;
+        let size = board::PERIPHERAL_SIZE as u64;
         map_range_with(
             &mut U_L1,
             &mut U_L2_POOL,
             &mut U_NEXT_L2,
             base,
             base,
-            0x0100_0000,
+            size,
             ATTR_DEVICE,
             AP_EL1_RW,
             SH_NONE,
@@ -161,7 +162,7 @@ unsafe fn map_mmio() {
             &mut K_NEXT_L2,
             KERNEL_VIRT_BASE + base,
             base,
-            0x0100_0000,
+            size,
             ATTR_DEVICE,
             AP_EL1_RW,
             SH_NONE,
@@ -222,13 +223,14 @@ unsafe fn map_mmio() {
     #[cfg(feature = "rpi5")]
     {
         let base = board::SOC_BASE as u64;
+        let size = board::SOC_MMIO_SIZE as u64;
         map_range_with(
             &mut U_L1,
             &mut U_L2_POOL,
             &mut U_NEXT_L2,
             base,
             base,
-            0x0100_0000,
+            size,
             ATTR_DEVICE,
             AP_EL1_RW,
             SH_NONE,
@@ -240,7 +242,7 @@ unsafe fn map_mmio() {
             &mut K_NEXT_L2,
             KERNEL_VIRT_BASE + base,
             base,
-            0x0100_0000,
+            size,
             ATTR_DEVICE,
             AP_EL1_RW,
             SH_NONE,

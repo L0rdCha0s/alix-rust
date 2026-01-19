@@ -63,13 +63,17 @@ pub fn init(dtb_pa: u64) {
     {
         map.add_region(
             board::PERIPHERAL_BASE as u64,
-            0x0100_0000,
+            board::PERIPHERAL_SIZE as u64,
             RegionKind::Mmio,
         );
     }
     #[cfg(feature = "rpi5")]
     {
-        map.add_region(board::SOC_BASE as u64, 0x0100_0000, RegionKind::Mmio);
+        map.add_region(
+            board::SOC_BASE as u64,
+            board::SOC_MMIO_SIZE as u64,
+            RegionKind::Mmio,
+        );
     }
 
     let normalized = map.normalize();
