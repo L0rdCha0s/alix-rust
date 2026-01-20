@@ -8,6 +8,7 @@ use crate::platform::board;
 const L2_TABLES: usize = 64;
 
 const BLOCK_SIZE: u64 = 0x20_0000; // 2 MiB
+const KERNEL_L0_INDEX: usize = ((KERNEL_VIRT_BASE >> 39) & 0x1ff) as usize;
 
 #[repr(align(4096))]
 struct PageTable([u64; 512]);
@@ -38,6 +39,8 @@ static mut U_NEXT_L2: usize = 0;
 
 static mut KERNEL_ROOT_PA: u64 = 0;
 static mut USER_ROOT_PA: u64 = 0;
+static mut EXTRA_MMIO_BASE: u64 = 0;
+static mut EXTRA_MMIO_SIZE: u64 = 0;
 
 const DESC_BLOCK: u64 = 0b01;
 const DESC_TABLE: u64 = 0b11;
@@ -66,8 +69,7 @@ pub fn init(map: &NormalizedMap) {
         K_L1.zero();
         K_NEXT_L2 = 0;
         let k_l1_pa = virt_to_phys(&K_L1 as *const _ as usize);
-        K_L0.0[0] = table_desc(k_l1_pa);
-        K_L0.0[511] = table_desc(k_l1_pa);
+        K_L0.0[KERNEL_L0_INDEX] = table_desc(k_l1_pa);
 
         // Initialize user tables (TTBR0) for identity mapping.
         U_L0.zero();
@@ -127,6 +129,13 @@ pub fn init(map: &NormalizedMap) {
             use core::fmt::Write;
             let _ = writeln!(uart, "paging: mmu enabled");
         });
+    }
+}
+
+pub fn set_extra_mmio(base: u64, size: u64) {
+    unsafe {
+        EXTRA_MMIO_BASE = base;
+        EXTRA_MMIO_SIZE = size;
     }
 }
 
@@ -224,6 +233,35 @@ unsafe fn map_mmio() {
     {
         let base = board::SOC_BASE as u64;
         let size = board::SOC_MMIO_SIZE as u64;
+        map_range_with(
+            &mut U_L1,
+            &mut U_L2_POOL,
+            &mut U_NEXT_L2,
+            base,
+            base,
+            size,
+            ATTR_DEVICE,
+            AP_EL1_RW,
+            SH_NONE,
+            true,
+        );
+        map_range_with(
+            &mut K_L1,
+            &mut K_L2_POOL,
+            &mut K_NEXT_L2,
+            KERNEL_VIRT_BASE + base,
+            base,
+            size,
+            ATTR_DEVICE,
+            AP_EL1_RW,
+            SH_NONE,
+            true,
+        );
+    }
+
+    if EXTRA_MMIO_SIZE != 0 {
+        let base = EXTRA_MMIO_BASE;
+        let size = EXTRA_MMIO_SIZE;
         map_range_with(
             &mut U_L1,
             &mut U_L2_POOL,

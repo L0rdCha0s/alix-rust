@@ -4,6 +4,8 @@ use core::ptr::{copy, write_volatile};
 
 use crate::drivers::mailbox;
 use crate::gfx::font;
+use crate::mm::layout::phys_to_virt;
+use crate::platform::simplefb::{SimpleFbFormat, SimpleFbInfo};
 use crate::util::sync::SpinLock;
 
 const TAG_SET_PHYS_WH: u32 = 0x0004_8003;
@@ -41,6 +43,7 @@ pub enum InitError {
     MailboxCallFailed,
     NoFramebuffer,
     NoPitch,
+    InvalidSimpleFb,
 }
 
 struct ConsoleState {
@@ -127,7 +130,7 @@ impl Framebuffer {
                 return Err(InitError::NoPitch);
             }
 
-            let fb_ptr = mailbox::vc_to_arm(fb_bus) as *mut u8;
+            let fb_ptr = phys_to_virt(mailbox::vc_to_arm(fb_bus) as u64) as *mut u8;
             let out_width = if buf[10] != 0 { buf[10] } else { width };
             let out_height = if buf[11] != 0 { buf[11] } else { height };
 
@@ -138,6 +141,23 @@ impl Framebuffer {
                 pitch,
             })
         }
+    }
+
+    pub fn init_from_simplefb(info: &SimpleFbInfo) -> Result<Self, InitError> {
+        // Initialize from a firmware-provided simple-framebuffer.
+        if info.addr == 0 || info.width == 0 || info.height == 0 || info.stride == 0 {
+            return Err(InitError::InvalidSimpleFb);
+        }
+        match info.format {
+            SimpleFbFormat::X8R8G8B8 | SimpleFbFormat::A8R8G8B8 => {}
+        }
+        let ptr = phys_to_virt(info.addr) as *mut u8;
+        Ok(Self {
+            ptr,
+            width: info.width,
+            height: info.height,
+            pitch: info.stride,
+        })
     }
 
     pub fn clear(&mut self, color: u32) {
@@ -287,6 +307,16 @@ pub fn init_console_with_mode(
     let out_width = fb.width;
     let out_height = fb.height;
     fb.clear(bg);
+    let mut state = CONSOLE.lock();
+    state.console = Some(Console::new(fb, fg, bg));
+    Ok((out_width, out_height))
+}
+
+pub fn init_console_from_simplefb(info: &SimpleFbInfo, fg: u32, bg: u32) -> Result<(u32, u32), InitError> {
+    let mut fb = Framebuffer::init_from_simplefb(info)?;
+    fb.clear(bg);
+    let out_width = fb.width;
+    let out_height = fb.height;
     let mut state = CONSOLE.lock();
     state.console = Some(Console::new(fb, fg, bg));
     Ok((out_width, out_height))

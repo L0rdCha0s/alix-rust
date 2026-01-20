@@ -23,12 +23,16 @@ boot_l1:
 .align 12
 boot_l2:
   .skip 4096
+.align 12
+boot_l2_rp1:
+  .skip 4096
 
 .section ".boot","ax"
 
 _start:
-  // Preserve boot arg (DTB pointer in x0) before clobbering.
-  mov x20, x0
+  // Preserve boot arg (DTB pointer in x0). On RPi, x0 is a 32-bit address;
+  // the upper bits may be garbage, so zero-extend it.
+  mov w20, w0
   // Drop to EL1 if needed.
   mrs x0, CurrentEL
   lsr x0, x0, #2
@@ -81,6 +85,14 @@ el2_to_el1:
   eret
 
 el1_start:
+  // Ensure MMU/caches are off in case firmware left them enabled.
+  mrs x0, sctlr_el1
+  bic x0, x0, #(1 << 0)   // M
+  bic x0, x0, #(1 << 2)   // C
+  bic x0, x0, #(1 << 12)  // I
+  msr sctlr_el1, x0
+  isb
+
   // Enable FP/SIMD in EL1 (compiler may use SIMD regs).
   mov x1, #(3 << 20)
   msr cpacr_el1, x1
@@ -111,6 +123,13 @@ el1_start:
   ldr x1, =__stack_end_phys
   mov sp, x1
 
+  // Early proof-of-life: write markers to RP1 UART0 (PL011) if enabled.
+  ldr x21, =0x1c00030000      // RP1 UART0 base (phys)
+  mov w1, #'B'
+  str w1, [x21, #0x00]
+  mov w1, #'\n'
+  str w1, [x21, #0x00]
+
   // Zero BSS using physical addresses.
   ldr x1, =__bss_start_phys
   ldr x2, =__bss_end_phys
@@ -121,19 +140,40 @@ el1_start:
   b 3b
 
 4:
+  mov w1, #'b'
+  str w1, [x21, #0x00]
+  mov w1, #'\n'
+  str w1, [x21, #0x00]
+
   // Build boot page tables and enable the MMU.
   bl boot_enable_mmu
+  mov w1, #'m'
+  str w1, [x21, #0x00]
+  mov w1, #'\n'
+  str w1, [x21, #0x00]
 
   // Install exception vectors (now valid at higher-half VA).
   ldr x1, =vector_table
   msr vbar_el1, x1
   isb
+  mov w1, #'v'
+  str w1, [x21, #0x00]
+  mov w1, #'\n'
+  str w1, [x21, #0x00]
 
   // Switch to higher-half kernel stack.
   ldr x1, =__stack_end
   mov sp, x1
+  mov w1, #'s'
+  str w1, [x21, #0x00]
+  mov w1, #'\n'
+  str w1, [x21, #0x00]
 
   mov x0, x20
+  mov w2, #'k'
+  str w2, [x21, #0x00]
+  mov w2, #'\n'
+  str w2, [x21, #0x00]
   ldr x1, =kernel_main
   br x1
 
@@ -265,12 +305,12 @@ boot_enable_mmu:
   subs x2, x2, #1
   b.ne 3b
 
-  // L0[0] = L1 table, L0[511] = L1 table (higher-half alias).
+  // L0[0] = L1 table, L0[256] = L1 table (higher-half alias).
   adr x0, boot_l0
   adr x1, boot_l1
   orr x2, x1, #0x3
   str x2, [x0]
-  mov x3, #511
+  mov x3, #256
   str x2, [x0, x3, lsl #3]
 
   // L1[0] = L2 table.
@@ -279,7 +319,13 @@ boot_enable_mmu:
   orr x2, x1, #0x3
   str x2, [x0]
 
-  // Fill L2 with 2 MiB blocks.
+  // L1[0x70] = RP1 MMIO table (maps 0x1c00000000..0x1c3fffffff).
+  adr x1, boot_l2_rp1
+  orr x2, x1, #0x3
+  mov x3, #0x70
+  str x2, [x0, x3, lsl #3]
+
+  // Fill L2 with 2 MiB blocks (identity for 0..1GiB).
   adr x0, boot_l2
   mov x3, #0
   mov x4, #512
@@ -297,6 +343,22 @@ boot_enable_mmu:
   add x3, x3, #1
   subs x4, x4, #1
   b.ne 4b
+
+  // Fill RP1 L2 with device blocks.
+  adr x0, boot_l2_rp1
+  mov x3, #0
+  mov x4, #512
+  mov x7, #0x1c
+  lsl x7, x7, #32
+6:
+  lsl x5, x3, #21
+  add x5, x7, x5
+  mov x6, #0x401
+  orr x6, x6, x5
+  str x6, [x0], #8
+  add x3, x3, #1
+  subs x4, x4, #1
+  b.ne 6b
 
   // MAIR: attr0=device, attr1=normal WBWA.
   mov x0, #0xff

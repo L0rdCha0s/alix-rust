@@ -3,6 +3,22 @@ use crate::mm::layout::{align_up, PAGE_SIZE};
 use crate::mm::region::{NormalizedMap, RegionKind};
 use crate::util::sync::SpinLock;
 
+#[cfg(feature = "rpi5")]
+const RP1_UART_FALLBACK: usize = 0x1c00_0300_00;
+
+#[cfg(feature = "rpi5")]
+#[inline(always)]
+unsafe fn early_uart_putc(b: u8) {
+    (RP1_UART_FALLBACK as *mut u32).write_volatile(b as u32);
+}
+
+#[cfg(feature = "rpi5")]
+fn early_uart_print(s: &str) {
+    for b in s.bytes() {
+        unsafe { early_uart_putc(b); }
+    }
+}
+
 pub struct FrameAllocator {
     frame_count: usize,
     bitmap: &'static mut [u64],
@@ -12,20 +28,34 @@ static FRAME_ALLOC: SpinLock<Option<FrameAllocator>> = SpinLock::new(None);
 
 pub fn init(map: &NormalizedMap) {
     // Build a bitmap allocator covering all physical frames in the system.
-    let max_end = map.max_phys_end();
+    let mut max_end = 0u64;
+    for region in map.regions() {
+        if region.kind == RegionKind::UsableRam && region.end > max_end {
+            max_end = region.end;
+        }
+    }
+    if max_end == 0 {
+        return;
+    }
     let frame_count = (align_up(max_end, PAGE_SIZE as u64) / PAGE_SIZE as u64) as usize;
     let bits = frame_count;
     let words = (bits + 63) / 64;
     let bytes = words * 8;
+    #[cfg(feature = "rpi5")]
+    early_uart_print("F0\n");
     let bitmap_paddr = match bootalloc::alloc(bytes, 8) {
         Some(addr) => addr,
         None => return,
     };
+    #[cfg(feature = "rpi5")]
+    early_uart_print("F1\n");
     let bitmap_ptr = bitmap_paddr as *mut u64;
     let bitmap = unsafe { core::slice::from_raw_parts_mut(bitmap_ptr, words) };
     for word in bitmap.iter_mut() {
         *word = u64::MAX;
     }
+    #[cfg(feature = "rpi5")]
+    early_uart_print("F2\n");
     let mut alloc = FrameAllocator {
         frame_count,
         bitmap,
@@ -37,12 +67,18 @@ pub fn init(map: &NormalizedMap) {
         // Mark usable RAM frames as free.
         alloc.mark_free(region.start, region.end);
     }
+    #[cfg(feature = "rpi5")]
+    early_uart_print("F3\n");
     // Reserve frames used by the boot allocator itself.
     let (boot_start, boot_end) = bootalloc::used_range();
     alloc.mark_used(boot_start, boot_end);
+    #[cfg(feature = "rpi5")]
+    early_uart_print("F4\n");
 
     let mut guard = FRAME_ALLOC.lock();
     *guard = Some(alloc);
+    #[cfg(feature = "rpi5")]
+    early_uart_print("F5\n");
 }
 
 pub fn alloc_frame() -> Option<u64> {

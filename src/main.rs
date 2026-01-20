@@ -24,6 +24,22 @@ use crate::user::shell;
 global_asm!(include_str!("arch/aarch64/boot.S"));
 global_asm!(include_str!("arch/aarch64/exception.S"));
 
+#[cfg(feature = "rpi5")]
+const RP1_UART_FALLBACK: usize = 0x1c00_0300_00;
+
+#[cfg(feature = "rpi5")]
+#[inline(always)]
+unsafe fn early_uart_putc(b: u8) {
+    (RP1_UART_FALLBACK as *mut u32).write_volatile(b as u32);
+}
+
+#[cfg(feature = "rpi5")]
+fn early_uart_print(s: &str) {
+    for b in s.bytes() {
+        unsafe { early_uart_putc(b); }
+    }
+}
+
 const USER_STACK_SIZE: usize = 512 * 1024;
 #[repr(align(16))]
 struct UserStack([u8; USER_STACK_SIZE]);
@@ -31,11 +47,45 @@ static mut USER_STACK: UserStack = UserStack([0; USER_STACK_SIZE]);
 
 #[no_mangle]
 pub extern "C" fn kernel_main(dtb_pa: u64) -> ! {
-    // Early UART is required for all boot diagnostics before MMU/FB are ready.
+    #[cfg(feature = "rpi5")]
+    early_uart_print("K0\n");
+
+    // Early UART for QEMU only; RPi5 UART base is discovered after DTB parse.
+    #[cfg(feature = "qemu")]
     uart::init();
+
+    #[cfg(feature = "rpi5")]
+    {
+        let mut found = false;
+        if let Some(info) = mm::dtb::find_uart(dtb_pa) {
+            uart::set_base(info.addr as usize);
+            uart::set_clock_hz(info.clock_hz);
+            uart::set_reg_shift(info.reg_shift);
+            uart::set_reg_io_width(info.reg_io_width);
+            uart::set_skip_init(info.skip_init);
+            found = true;
+        }
+        if !found {
+            // Fallback to RP1 UART0 base (matches firmware RP1_UART line).
+            uart::set_base(RP1_UART_FALLBACK);
+            uart::set_reg_shift(0);
+            uart::set_reg_io_width(4);
+            uart::set_skip_init(true);
+        }
+        uart::init();
+        early_uart_print("K1\n");
+    }
 
     // Parse DTB, build memory map, initialize allocators, and enable paging/MMU.
     mm::init(dtb_pa);
+    #[cfg(feature = "rpi5")]
+    early_uart_print("K2\n");
+
+    // Bring up UART on real hardware after MMU mappings are installed (if not already).
+    #[cfg(feature = "rpi5")]
+    if !uart::is_ready() {
+        uart::init();
+    }
 
     // Process table + VFS must exist before spawning kernel/user processes.
     process::init();
@@ -43,7 +93,7 @@ pub extern "C" fn kernel_main(dtb_pa: u64) -> ! {
 
     #[cfg(feature = "qemu")]
     loop {
-        if try_init_console() {
+        if try_init_console(dtb_pa) {
             break;
         }
         // QEMU framebuffer init can fail transiently; keep retrying.
@@ -52,7 +102,7 @@ pub extern "C" fn kernel_main(dtb_pa: u64) -> ! {
 
     #[cfg(not(feature = "qemu"))]
     {
-        if !try_init_console() {
+        if !try_init_console(dtb_pa) {
             uart::with_uart(|uart| {
                 use core::fmt::Write;
                 let _ = writeln!(uart, "Framebuffer init failed; using UART");
@@ -143,8 +193,35 @@ pub extern "C" fn idle_loop() -> ! {
     }
 }
 
-fn try_init_console() -> bool {
-    // Try multiple framebuffer modes; return true on first success.
+fn try_init_console(dtb_pa: u64) -> bool {
+    // Prefer a firmware-provided simple framebuffer if present.
+    if let Some(info) = mm::dtb::find_simplefb(dtb_pa) {
+        uart::with_uart(|uart| {
+            use core::fmt::Write;
+            let _ = writeln!(
+                uart,
+                "simplefb: addr={:#x} size={:#x} {}x{} stride={}",
+                info.addr, info.size, info.width, info.height, info.stride
+            );
+        });
+        match framebuffer::init_console_from_simplefb(&info, 0x00FF_FFFF, 0x0000_0000) {
+            Ok((ow, oh)) => {
+                uart::with_uart(|uart| {
+                    use core::fmt::Write;
+                    let _ = writeln!(uart, "simplefb active {}x{}", ow, oh);
+                });
+                return true;
+            }
+            Err(err) => {
+                uart::with_uart(|uart| {
+                    use core::fmt::Write;
+                    let _ = writeln!(uart, "simplefb init failed: {}", fb_err_str(err));
+                });
+            }
+        }
+    }
+
+    // Try multiple mailbox framebuffer modes; return true on first success.
     let modes = [(1280, 1024), (1024, 768), (1920, 1080)];
     for (w, h) in modes {
         uart::with_uart(|uart| {
@@ -175,5 +252,6 @@ fn fb_err_str(err: framebuffer::InitError) -> &'static str {
         framebuffer::InitError::MailboxCallFailed => "mailbox call failed",
         framebuffer::InitError::NoFramebuffer => "no framebuffer address",
         framebuffer::InitError::NoPitch => "no pitch returned",
+        framebuffer::InitError::InvalidSimpleFb => "invalid simplefb data",
     }
 }

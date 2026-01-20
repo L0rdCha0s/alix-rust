@@ -8,12 +8,16 @@ compile_error!("Select a board feature: rpi5 (default) or qemu.");
 #[cfg(feature = "rpi5")]
 pub const SOC_BASE: usize = 0x107c_0000_00;
 #[cfg(feature = "rpi5")]
-pub const SOC_MMIO_SIZE: usize = 0x0400_0000;
+pub const SOC_MMIO_SIZE: usize = 0x8000_0000;
 #[cfg(feature = "rpi5")]
-pub const MBOX_BASE: usize = SOC_BASE + 0x0001_3880;
+pub const GICD_BASE: usize = SOC_BASE + 0x7fff_9000;
+#[cfg(feature = "rpi5")]
+pub const GICC_BASE: usize = SOC_BASE + 0x7fff_c000;
+#[cfg(feature = "rpi5")]
+pub const MBOX_BASE: usize = SOC_BASE + 0x7c01_3880;
 #[cfg(feature = "rpi5")]
 #[allow(dead_code)]
-pub const UART_BASE: usize = SOC_BASE + 0x0100_1000;
+pub const UART_BASE: usize = SOC_BASE + 0x7d00_1000;
 #[cfg(feature = "rpi5")]
 pub const VC_MEM_BASE: u32 = 0x0000_0000; // DMA is identity-mapped on BCM2712
 #[cfg(feature = "rpi5")]

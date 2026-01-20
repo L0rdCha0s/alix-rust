@@ -2,7 +2,8 @@ pub const PAGE_SIZE: usize = 4096;
 pub const PAGE_MASK: usize = PAGE_SIZE - 1;
 
 pub const KERNEL_PHYS_BASE: u64 = 0x80000;
-pub const KERNEL_VIRT_BASE: u64 = 0xFFFF_0000_0000_0000;
+// Use a canonical high-half VA (48-bit) with ample room for physmap.
+pub const KERNEL_VIRT_BASE: u64 = 0xFFFF_8000_0000_0000;
 pub const PHYS_MAP_BASE: u64 = KERNEL_VIRT_BASE;
 
 #[inline(always)]

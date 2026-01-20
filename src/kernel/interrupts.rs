@@ -6,6 +6,8 @@ use crate::arch::aarch64::trap::TrapFrame;
 use crate::drivers::keyboard;
 #[cfg(feature = "qemu")]
 use crate::drivers::local_intc;
+#[cfg(feature = "rpi5")]
+use crate::drivers::gic;
 use crate::kernel::process;
 use crate::kernel::smp;
 use crate::drivers::uart;
@@ -24,6 +26,13 @@ pub fn init_per_cpu(tick_ms: u64) {
     timer::init_tick(tick_ms);
     #[cfg(feature = "qemu")]
     local_intc::enable_generic_timer_irq(smp::cpu_id());
+    #[cfg(feature = "rpi5")]
+    {
+        if smp::cpu_id() == 0 {
+            gic::init_dist();
+        }
+        gic::init_cpu();
+    }
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "irq init cpu{}", smp::cpu_id());
@@ -41,6 +50,20 @@ pub fn enable_irq() {
 #[no_mangle]
 pub extern "C" fn irq_handler(frame: *mut TrapFrame) -> *mut TrapFrame {
     // Timer IRQ handler: poll input, update ticks, and schedule.
+    #[cfg(feature = "rpi5")]
+    let irq_id = gic::ack_irq();
+    #[cfg(feature = "rpi5")]
+    {
+        if irq_id.is_none() {
+            return frame;
+        }
+        if irq_id != Some(gic::timer_irq_id()) {
+            if let Some(id) = irq_id {
+                gic::end_irq(id);
+            }
+            return frame;
+        }
+    }
     #[cfg(feature = "qemu")]
     {
         if !local_intc::generic_timer_pending(smp::cpu_id()) {
@@ -69,5 +92,12 @@ pub extern "C" fn irq_handler(frame: *mut TrapFrame) -> *mut TrapFrame {
     }
     keyboard::poll();
     timer::tick();
-    process::schedule_from_irq(frame)
+    let next = process::schedule_from_irq(frame);
+    #[cfg(feature = "rpi5")]
+    {
+        if let Some(id) = irq_id {
+            gic::end_irq(id);
+        }
+    }
+    next
 }

@@ -9,9 +9,118 @@ pub mod paging;
 pub mod region;
 
 use crate::drivers::uart;
-use crate::mm::layout::{align_up, KERNEL_PHYS_BASE, PAGE_SIZE};
+use crate::mm::layout::{align_down, align_up, KERNEL_PHYS_BASE, PAGE_SIZE};
 use crate::mm::region::{MemoryMap, RegionKind};
 use crate::platform::board;
+
+#[cfg(feature = "rpi5")]
+const RP1_UART_FALLBACK: usize = 0x1c00_0300_00;
+
+#[cfg(feature = "rpi5")]
+#[inline(always)]
+unsafe fn early_uart_putc(b: u8) {
+    (RP1_UART_FALLBACK as *mut u32).write_volatile(b as u32);
+}
+
+#[cfg(feature = "rpi5")]
+fn early_uart_print(s: &str) {
+    for b in s.bytes() {
+        unsafe { early_uart_putc(b); }
+    }
+}
+
+#[cfg(feature = "rpi5")]
+#[inline(always)]
+fn early_uart_delay() {
+    // Coarse delay to avoid TX FIFO overflow when we don't poll FR.
+    for _ in 0..200_000 {
+        unsafe { core::arch::asm!("nop", options(nomem, nostack, preserves_flags)) }
+    }
+}
+
+#[cfg(feature = "rpi5")]
+fn early_uart_print_slow(s: &str) {
+    for b in s.bytes() {
+        unsafe { early_uart_putc(b); }
+        early_uart_delay();
+    }
+}
+
+#[cfg(feature = "rpi5")]
+fn early_uart_hex_u64(value: u64) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    early_uart_print_slow("0x");
+    let mut shift = 60u32;
+    while shift <= 60 {
+        let nibble = ((value >> shift) & 0xF) as usize;
+        unsafe { early_uart_putc(HEX[nibble]); }
+        early_uart_delay();
+        if shift == 0 {
+            break;
+        }
+        shift -= 4;
+    }
+}
+
+#[cfg(feature = "rpi5")]
+fn early_uart_kind(kind: RegionKind) {
+    match kind {
+        RegionKind::UsableRam => early_uart_print("usable"),
+        RegionKind::Reserved => early_uart_print("reserved"),
+        RegionKind::Mmio => early_uart_print("mmio"),
+        RegionKind::KernelImage => early_uart_print("kernel"),
+        RegionKind::BootStack => early_uart_print("stack"),
+        RegionKind::BootInfo => early_uart_print("bootinfo"),
+    }
+}
+
+#[cfg(feature = "rpi5")]
+fn log_map_raw(map: &crate::mm::region::NormalizedMap) {
+    early_uart_print_slow("Memory map:\n");
+    for region in map.regions() {
+        early_uart_print_slow("  ");
+        early_uart_hex_u64(region.start);
+        early_uart_print_slow("-");
+        early_uart_hex_u64(region.end);
+        early_uart_print_slow(" ");
+        early_uart_kind(region.kind);
+        early_uart_print_slow("\n");
+    }
+}
+
+#[cfg(feature = "rpi5")]
+fn log_summary_raw(map: &crate::mm::region::NormalizedMap) {
+    let mut usable = 0u64;
+    let mut reserved = 0u64;
+    let mut mmio = 0u64;
+    let mut kernel = 0u64;
+    let mut bootinfo = 0u64;
+    let mut stack = 0u64;
+    for region in map.regions() {
+        let size = region.end.saturating_sub(region.start);
+        match region.kind {
+            RegionKind::UsableRam => usable += size,
+            RegionKind::Reserved => reserved += size,
+            RegionKind::Mmio => mmio += size,
+            RegionKind::KernelImage => kernel += size,
+            RegionKind::BootInfo => bootinfo += size,
+            RegionKind::BootStack => stack += size,
+        }
+    }
+    early_uart_print_slow("Memory summary: usable=");
+    early_uart_hex_u64(usable);
+    early_uart_print_slow(" reserved=");
+    early_uart_hex_u64(reserved);
+    early_uart_print_slow(" mmio=");
+    early_uart_hex_u64(mmio);
+    early_uart_print_slow(" kernel=");
+    early_uart_hex_u64(kernel);
+    early_uart_print_slow(" stack=");
+    early_uart_hex_u64(stack);
+    early_uart_print_slow(" bootinfo=");
+    early_uart_hex_u64(bootinfo);
+    early_uart_print_slow("\n");
+}
 
 #[repr(C)]
 struct KernelPhysInfo {
@@ -27,9 +136,32 @@ extern "C" {
 }
 
 pub fn init(dtb_pa: u64) {
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M0\n");
+
     // Build a raw memory map from DTB + known regions, then normalize it.
     let mut map = MemoryMap::new();
     let dtb_info = dtb::parse(dtb_pa, &mut map);
+
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M1\n");
+
+    #[cfg(feature = "rpi5")]
+    {
+        if let Some(info) = dtb::find_uart(dtb_pa) {
+            // Map the UART MMIO window and stash its base for init after paging.
+            uart::set_base(info.addr as usize);
+            uart::set_clock_hz(info.clock_hz);
+            uart::set_reg_shift(info.reg_shift);
+            uart::set_reg_io_width(info.reg_io_width);
+            uart::set_skip_init(info.skip_init);
+            let mmio_base = align_down(info.addr, 0x20_0000);
+            paging::set_extra_mmio(mmio_base, 0x20_0000);
+        }
+    }
+
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M2\n");
 
     let info = unsafe { &__kernel_phys_info };
     let kernel_start = info.kernel_start;
@@ -78,9 +210,23 @@ pub fn init(dtb_pa: u64) {
 
     let normalized = map.normalize();
 
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M3\n");
+
     // Log the normalized map before allocating.
-    log_map(&normalized);
-    log_summary(&normalized);
+    #[cfg(feature = "rpi5")]
+    {
+        log_map_raw(&normalized);
+        log_summary_raw(&normalized);
+    }
+    #[cfg(feature = "qemu")]
+    {
+        log_map(&normalized);
+        log_summary(&normalized);
+    }
+
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M4\n");
 
     let boot_start = align_up(kernel_end, PAGE_SIZE as u64);
     let mut boot_end = 0u64;
@@ -100,45 +246,86 @@ pub fn init(dtb_pa: u64) {
         return;
     }
 
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M5\n");
+
     // Boot allocator is used for early allocations before the heap is ready.
+    #[cfg(feature = "rpi5")]
+    {
+        early_uart_print_slow("mm: bootalloc init start=");
+        early_uart_hex_u64(boot_start);
+        early_uart_print_slow(" end=");
+        early_uart_hex_u64(boot_end);
+        early_uart_print_slow("\n");
+    }
+    #[cfg(feature = "qemu")]
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "mm: bootalloc init start={:#x} end={:#x}", boot_start, boot_end);
     });
     bootalloc::init(boot_start, boot_end);
+    #[cfg(feature = "rpi5")]
+    early_uart_print_slow("mm: bootalloc ready\n");
+    #[cfg(feature = "qemu")]
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "mm: bootalloc ready");
     });
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M6\n");
+    #[cfg(feature = "rpi5")]
+    early_uart_print_slow("mm: frame allocator init\n");
+    #[cfg(feature = "qemu")]
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "mm: frame allocator init");
     });
     frame::init(&normalized);
+    #[cfg(feature = "rpi5")]
+    early_uart_print_slow("mm: frame allocator ready\n");
+    #[cfg(feature = "qemu")]
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "mm: frame allocator ready");
     });
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M7\n");
+    #[cfg(feature = "rpi5")]
+    early_uart_print_slow("mm: paging init\n");
+    #[cfg(feature = "qemu")]
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "mm: paging init");
     });
     // Build identity-mapped page tables and enable the MMU.
     paging::init(&normalized);
+    #[cfg(feature = "rpi5")]
+    early_uart_print_slow("mm: paging ready\n");
+    #[cfg(feature = "qemu")]
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "mm: paging ready");
     });
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M8\n");
+    #[cfg(feature = "rpi5")]
+    early_uart_print_slow("mm: heap init\n");
+    #[cfg(feature = "qemu")]
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "mm: heap init");
     });
     // Initialize the kernel heap allocator.
     heap::init();
+    #[cfg(feature = "rpi5")]
+    early_uart_print_slow("mm: heap ready\n");
+    #[cfg(feature = "qemu")]
     uart::with_uart(|uart| {
         use core::fmt::Write;
         let _ = writeln!(uart, "mm: heap ready");
     });
+    #[cfg(feature = "rpi5")]
+    early_uart_print("M9\n");
 }
 
 fn log_map(map: &crate::mm::region::NormalizedMap) {
