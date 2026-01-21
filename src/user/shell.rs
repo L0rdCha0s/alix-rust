@@ -19,6 +19,8 @@ pub extern "C" fn user_shell() -> ! {
                 continue;
             }
             let mut b = byte[0];
+            // Echo input bytes back so we can see UART RX is working.
+            let _ = user::write_bytes(stdout, &byte);
             if b == b'\r' {
                 saw_cr = true;
                 b = b'\n';

@@ -5,10 +5,53 @@ use crate::mm::layout::{align_down, align_up, phys_to_virt, virt_to_phys, KERNEL
 use crate::mm::region::{NormalizedMap, RegionKind};
 use crate::platform::board;
 
-const L2_TABLES: usize = 64;
+const L2_TABLES: usize = 1024;
 
 const BLOCK_SIZE: u64 = 0x20_0000; // 2 MiB
 const KERNEL_L0_INDEX: usize = ((KERNEL_VIRT_BASE >> 39) & 0x1ff) as usize;
+
+#[cfg(feature = "rpi5")]
+const RP1_BASE: u64 = 0x0000_001c_0000_0000;
+#[cfg(feature = "rpi5")]
+const RP1_SIZE: u64 = 0x4000_0000; // 1 GiB
+
+#[cfg(feature = "rpi5")]
+#[inline(always)]
+fn early_uart_print(s: &str) {
+    const RP1_UART_FALLBACK: usize = 0x1c00_0300_00;
+    for b in s.bytes() {
+        if b == b'\n' {
+            unsafe { (RP1_UART_FALLBACK as *mut u32).write_volatile(b'\r' as u32) };
+        }
+        unsafe { (RP1_UART_FALLBACK as *mut u32).write_volatile(b as u32) };
+    }
+}
+
+#[cfg(feature = "rpi5")]
+#[inline(always)]
+fn early_uart_delay() {
+    for _ in 0..200_000 {
+        unsafe { core::arch::asm!("nop", options(nomem, nostack, preserves_flags)) }
+    }
+}
+
+#[cfg(feature = "rpi5")]
+fn early_uart_print_slow(s: &str) {
+    for b in s.bytes() {
+        if b == b'\n' {
+            unsafe { (0x1c00_0300_00 as *mut u32).write_volatile(b'\r' as u32) };
+            early_uart_delay();
+        }
+        unsafe { (0x1c00_0300_00 as *mut u32).write_volatile(b as u32) };
+        early_uart_delay();
+    }
+}
+
+#[cfg(feature = "rpi5")]
+fn early_mark(tag: &str) {
+    early_uart_print_slow(tag);
+    early_uart_print_slow("\n");
+}
 
 #[repr(align(4096))]
 struct PageTable([u64; 512]);
@@ -59,6 +102,11 @@ const SH_INNER: u64 = 0b11;
 
 pub fn init(map: &NormalizedMap) {
     unsafe {
+        #[cfg(feature = "rpi5")]
+        {
+            early_mark("P0");
+        }
+        #[cfg(feature = "qemu")]
         crate::drivers::uart::with_uart(|uart| {
             use core::fmt::Write;
             let _ = writeln!(uart, "paging: build tables");
@@ -82,14 +130,29 @@ pub fn init(map: &NormalizedMap) {
             if region.kind == RegionKind::Mmio {
                 continue;
             }
-            let size = region.end.saturating_sub(region.start);
+            let start = region.start;
+            let mut end = region.end;
+            #[cfg(feature = "rpi5")]
+            {
+                // Temporarily cap usable RAM mapping to 1 GiB to keep paging bring-up simple.
+                if region.kind == RegionKind::UsableRam {
+                    let cap = start.saturating_add(0x4000_0000);
+                    if end > cap {
+                        end = cap;
+                    }
+                }
+            }
+            let size = end.saturating_sub(start);
+            if size == 0 {
+                continue;
+            }
             // Kernel higher-half mapping of RAM.
             map_range_with(
                 &mut K_L1,
                 &mut K_L2_POOL,
                 &mut K_NEXT_L2,
-                KERNEL_VIRT_BASE + region.start,
-                region.start,
+                KERNEL_VIRT_BASE + start,
+                start,
                 size,
                 ATTR_NORMAL,
                 AP_EL1_RW,
@@ -101,8 +164,8 @@ pub fn init(map: &NormalizedMap) {
                 &mut U_L1,
                 &mut U_L2_POOL,
                 &mut U_NEXT_L2,
-                region.start,
-                region.start,
+                start,
+                start,
                 size,
                 ATTR_NORMAL,
                 AP_EL0_RW,
@@ -111,11 +174,22 @@ pub fn init(map: &NormalizedMap) {
             );
         }
 
+        #[cfg(feature = "rpi5")]
+        early_mark("P1");
+
         map_mmio();
+
+        #[cfg(feature = "rpi5")]
+        early_mark("P2");
 
         KERNEL_ROOT_PA = virt_to_phys(&K_L0 as *const _ as usize);
         USER_ROOT_PA = virt_to_phys(&U_L0 as *const _ as usize);
 
+        #[cfg(feature = "rpi5")]
+        {
+            early_mark("P3");
+        }
+        #[cfg(feature = "qemu")]
         crate::drivers::uart::with_uart(|uart| {
             use core::fmt::Write;
             let _ = writeln!(
@@ -125,6 +199,9 @@ pub fn init(map: &NormalizedMap) {
             );
         });
         mmu::enable_mmu(USER_ROOT_PA, KERNEL_ROOT_PA);
+        #[cfg(feature = "rpi5")]
+        early_mark("P4");
+        #[cfg(feature = "qemu")]
         crate::drivers::uart::with_uart(|uart| {
             use core::fmt::Write;
             let _ = writeln!(uart, "paging: mmu enabled");
@@ -257,6 +334,32 @@ unsafe fn map_mmio() {
             SH_NONE,
             true,
         );
+
+        // Map RP1 MMIO (UART0 lives here) identity + higher-half.
+        map_range_with(
+            &mut U_L1,
+            &mut U_L2_POOL,
+            &mut U_NEXT_L2,
+            RP1_BASE,
+            RP1_BASE,
+            RP1_SIZE,
+            ATTR_DEVICE,
+            AP_EL1_RW,
+            SH_NONE,
+            true,
+        );
+        map_range_with(
+            &mut K_L1,
+            &mut K_L2_POOL,
+            &mut K_NEXT_L2,
+            KERNEL_VIRT_BASE + RP1_BASE,
+            RP1_BASE,
+            RP1_SIZE,
+            ATTR_DEVICE,
+            AP_EL1_RW,
+            SH_NONE,
+            true,
+        );
     }
 
     if EXTRA_MMIO_SIZE != 0 {
@@ -345,6 +448,10 @@ unsafe fn get_l2_table_with<'a>(
     }
     let idx = *next_l2;
     if idx >= L2_TABLES {
+        #[cfg(feature = "rpi5")]
+        {
+            early_mark("PX");
+        }
         loop {
             core::arch::asm!("wfe", options(nomem, nostack, preserves_flags));
         }

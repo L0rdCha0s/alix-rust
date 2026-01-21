@@ -15,6 +15,9 @@ unsafe fn early_uart_putc(b: u8) {
 #[cfg(feature = "rpi5")]
 fn early_uart_print(s: &str) {
     for b in s.bytes() {
+        if b == b'\n' {
+            unsafe { early_uart_putc(b'\r'); }
+        }
         unsafe { early_uart_putc(b); }
     }
 }

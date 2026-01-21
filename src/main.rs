@@ -36,6 +36,9 @@ unsafe fn early_uart_putc(b: u8) {
 #[cfg(feature = "rpi5")]
 fn early_uart_print(s: &str) {
     for b in s.bytes() {
+        if b == b'\n' {
+            unsafe { early_uart_putc(b'\r'); }
+        }
         unsafe { early_uart_putc(b); }
     }
 }
@@ -138,13 +141,13 @@ pub extern "C" fn kernel_main(dtb_pa: u64) -> ! {
     // Create kernel idle loops and the user shell process.
     uart::with_uart(|uart| {
         use core::fmt::Write;
+        if let Some(pid) = process::create_user("shell", kuser::user_start, 0) {
+            let _ = writeln!(uart, "Created process {} (shell user)", pid.0);
+        }
         for core in 0..smp::MAX_CPUS {
             if let Some(pid) = process::create("idle", idle_loop, 0) {
                 let _ = writeln!(uart, "Created idle process {} for CPU{}", pid.0, core);
             }
-        }
-        if let Some(pid) = process::create_user("shell", kuser::user_start, 0) {
-            let _ = writeln!(uart, "Created process {} (shell user)", pid.0);
         }
         process::for_each(|proc| {
             let mode = match proc.mode {

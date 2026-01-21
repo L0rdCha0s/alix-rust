@@ -9,6 +9,7 @@ pub mod paging;
 pub mod region;
 
 use crate::drivers::uart;
+use crate::arch::aarch64::mmu;
 use crate::mm::layout::{align_down, align_up, KERNEL_PHYS_BASE, PAGE_SIZE};
 use crate::mm::region::{MemoryMap, RegionKind};
 use crate::platform::board;
@@ -25,6 +26,9 @@ unsafe fn early_uart_putc(b: u8) {
 #[cfg(feature = "rpi5")]
 fn early_uart_print(s: &str) {
     for b in s.bytes() {
+        if b == b'\n' {
+            unsafe { early_uart_putc(b'\r'); }
+        }
         unsafe { early_uart_putc(b); }
     }
 }
@@ -41,6 +45,10 @@ fn early_uart_delay() {
 #[cfg(feature = "rpi5")]
 fn early_uart_print_slow(s: &str) {
     for b in s.bytes() {
+        if b == b'\n' {
+            unsafe { early_uart_putc(b'\r'); }
+            early_uart_delay();
+        }
         unsafe { early_uart_putc(b); }
         early_uart_delay();
     }
@@ -248,6 +256,13 @@ pub fn init(dtb_pa: u64) {
 
     #[cfg(feature = "rpi5")]
     early_uart_print("M5\n");
+
+    #[cfg(feature = "rpi5")]
+    {
+        early_uart_print_slow("mm: enable caches\n");
+        mmu::enable_caches();
+        early_uart_print_slow("mm: caches on\n");
+    }
 
     // Boot allocator is used for early allocations before the heap is ready.
     #[cfg(feature = "rpi5")]

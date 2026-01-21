@@ -1,4 +1,5 @@
 use crate::drivers::framebuffer;
+use crate::drivers::uart;
 use crate::drivers::keyboard;
 
 pub const FD_STDIN: usize = 0;
@@ -96,10 +97,16 @@ pub fn write(desc: &FileDesc, buf: &[u8]) -> usize {
                 }
             });
             if wrote {
-                buf.len()
-            } else {
-                0
+                return buf.len();
             }
+            // Fallback to UART when framebuffer isn't available (e.g., rpi5).
+            for &b in buf {
+                if b == b'\n' {
+                    uart::write_byte(b'\r');
+                }
+                uart::write_byte(b);
+            }
+            buf.len()
         }
         FileHandle::DevKbd0 => 0,
     }

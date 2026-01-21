@@ -127,6 +127,8 @@ el1_start:
   ldr x21, =0x1c00030000      // RP1 UART0 base (phys)
   mov w1, #'B'
   str w1, [x21, #0x00]
+  mov w1, #'\r'
+  str w1, [x21, #0x00]
   mov w1, #'\n'
   str w1, [x21, #0x00]
 
@@ -142,12 +144,16 @@ el1_start:
 4:
   mov w1, #'b'
   str w1, [x21, #0x00]
+  mov w1, #'\r'
+  str w1, [x21, #0x00]
   mov w1, #'\n'
   str w1, [x21, #0x00]
 
   // Build boot page tables and enable the MMU.
   bl boot_enable_mmu
   mov w1, #'m'
+  str w1, [x21, #0x00]
+  mov w1, #'\r'
   str w1, [x21, #0x00]
   mov w1, #'\n'
   str w1, [x21, #0x00]
@@ -158,6 +164,8 @@ el1_start:
   isb
   mov w1, #'v'
   str w1, [x21, #0x00]
+  mov w1, #'\r'
+  str w1, [x21, #0x00]
   mov w1, #'\n'
   str w1, [x21, #0x00]
 
@@ -166,11 +174,15 @@ el1_start:
   mov sp, x1
   mov w1, #'s'
   str w1, [x21, #0x00]
+  mov w1, #'\r'
+  str w1, [x21, #0x00]
   mov w1, #'\n'
   str w1, [x21, #0x00]
 
   mov x0, x20
   mov w2, #'k'
+  str w2, [x21, #0x00]
+  mov w2, #'\r'
   str w2, [x21, #0x00]
   mov w2, #'\n'
   str w2, [x21, #0x00]
@@ -376,7 +388,7 @@ boot_enable_mmu:
   orr x0, x0, #(1 << 24)
   orr x0, x0, #(1 << 26)
   orr x0, x0, #(3 << 28)
-  // TG1 = 0b10 (4K)
+  // TG1 = 0b10 (64K)
   orr x0, x0, #(2 << 30)
   // IPS = 0b010 (40-bit)
   orr x0, x0, #(2 << 32)

@@ -1,6 +1,6 @@
 use crate::util::sync::SpinLock;
 
-#[cfg(feature = "qemu")]
+#[cfg(any(feature = "qemu", feature = "rpi5"))]
 use crate::drivers::uart;
 
 const BUF_SIZE: usize = 256;
@@ -49,12 +49,13 @@ static INPUT_BUF: SpinLock<RingBuffer> = SpinLock::new(RingBuffer::new());
 
 pub fn poll() {
     // Poll the UART for input and push bytes into the ring buffer.
-    #[cfg(feature = "qemu")]
+    #[cfg(any(feature = "qemu", feature = "rpi5"))]
     {
         let mut buf = match INPUT_BUF.try_lock() {
             Some(buf) => buf,
             None => return,
         };
+        let mut spins = 0usize;
         loop {
             let mut byte = match uart::read_byte_nonblocking() {
                 Some(b) => b,
@@ -63,7 +64,13 @@ pub fn poll() {
             if byte == b'\r' {
                 byte = b'\n';
             }
-            let _ = buf.push(byte);
+            if !buf.push(byte) {
+                break;
+            }
+            spins += 1;
+            if spins >= BUF_SIZE {
+                break;
+            }
         }
     }
 }

@@ -75,6 +75,12 @@ pub fn init() {
         return;
     }
     if UART_SKIP_INIT.load(Ordering::Relaxed) {
+        // Firmware configured the UART; just ensure TX/RX are enabled.
+        unsafe {
+            let cr = read32(reg_addr(base, UART_CR));
+            let enable = (1 << 0) | (1 << 8) | (1 << 9);
+            write32(reg_addr(base, UART_CR), cr | enable);
+        }
         UART_READY.store(true, Ordering::Relaxed);
         return;
     }
